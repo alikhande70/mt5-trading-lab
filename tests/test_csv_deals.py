@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from trading_lab.csv_deals import DealsParseError, load_column_map, parse_deals_csv
+from trading_lab.csv_deals import (
+    DealsParseError,
+    inspect_deals_csv_columns,
+    load_column_map,
+    parse_deals_csv,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -286,3 +291,128 @@ def test_unmapped_operation_header_warns_even_without_column_overrides(tmp_path)
     parsed = parse_deals_csv(csv_path)
     assert len(parsed.deals) == 2
     assert any("operation" in w.lower() for w in parsed.warnings)
+
+
+def test_inspect_columns_with_built_in_aliases():
+    inspection = inspect_deals_csv_columns(FIXTURES / "sample_deals.csv")
+
+    assert [c.canonical_field for c in inspection.columns] == [
+        "time",
+        "type",
+        "symbol",
+        "volume",
+        "price",
+        "commission",
+        "swap",
+        "profit",
+    ]
+    assert all(c.source == "built-in alias" for c in inspection.columns)
+    assert inspection.warnings == []
+    assert "without --list-columns" in inspection.suggested_next_action
+
+
+def test_inspect_columns_with_column_map():
+    column_map = load_column_map(FIXTURES / "custom_header_column_map.json")
+    inspection = inspect_deals_csv_columns(
+        FIXTURES / "custom_header_deals.csv", column_map_overrides=column_map
+    )
+
+    by_header = {c.raw_header: c for c in inspection.columns}
+    assert by_header["Operation"].canonical_field == "type"
+    assert by_header["Operation"].source == "column-map"
+    assert by_header["Entry Type"].canonical_field == "entry"
+    assert by_header["Result"].canonical_field == "profit"
+    assert all(c.source == "column-map" for c in inspection.columns)
+    assert inspection.warnings == []
+
+
+def test_inspect_columns_with_direct_overrides():
+    inspection = inspect_deals_csv_columns(
+        FIXTURES / "custom_header_deals.csv",
+        direct_overrides={"profit": "Result", "type": "Operation", "entry": "Entry Type"},
+    )
+
+    by_header = {c.raw_header: c for c in inspection.columns}
+    assert by_header["Result"].source == "direct override"
+    assert by_header["Result"].canonical_field == "profit"
+    assert by_header["Operation"].source == "direct override"
+    assert by_header["Entry Type"].source == "direct override"
+    # "Close Time"/"Instrument"/"Lots" still resolve via built-in alias.
+    assert by_header["Close Time"].source == "built-in alias"
+    assert by_header["Instrument"].source == "built-in alias"
+    # "Fee"/"Overnight"/"Note" are not built-in aliases and weren't overridden.
+    assert by_header["Fee"].canonical_field is None
+    assert by_header["Fee"].source == "unmapped"
+    assert inspection.warnings == []
+
+
+def test_inspect_columns_direct_override_wins_over_column_map_as_source():
+    csv_path = Path(FIXTURES) / "sample_deals.csv"
+
+    inspection = inspect_deals_csv_columns(
+        csv_path,
+        column_map_overrides={"profit": "Profit"},
+        direct_overrides={"profit": "Profit"},
+    )
+    by_header = {c.raw_header: c for c in inspection.columns}
+    assert by_header["Profit"].source == "direct override"
+
+
+def test_inspect_columns_direct_override_replaces_column_map_target(tmp_path):
+    # Column map points "profit" at "Decoy"; the direct override repoints the
+    # same canonical field at "Result" instead. "Decoy" must then be left
+    # unmapped rather than also resolving to "profit".
+    csv_path = tmp_path / "decoy_deals.csv"
+    csv_path.write_text("Result,Decoy\n50.00,9999.00\n", encoding="utf-8")
+
+    inspection = inspect_deals_csv_columns(
+        csv_path,
+        column_map_overrides={"profit": "Decoy"},
+        direct_overrides={"profit": "Result"},
+    )
+    by_header = {c.raw_header: c for c in inspection.columns}
+    assert by_header["Result"].canonical_field == "profit"
+    assert by_header["Result"].source == "direct override"
+    assert by_header["Decoy"].canonical_field is None
+    assert by_header["Decoy"].source == "unmapped"
+
+
+def test_inspect_columns_warns_on_suspicious_unmapped_headers(tmp_path):
+    csv_path = tmp_path / "operation_unmapped.csv"
+    csv_path.write_text(
+        "Time,Operation,Symbol,Profit\n2024.01.01 00:00:00,balance,,10000.00\n",
+        encoding="utf-8",
+    )
+
+    inspection = inspect_deals_csv_columns(csv_path)
+    assert any("operation" in w.lower() for w in inspection.warnings)
+
+
+def test_inspect_columns_warns_on_missing_profit_mapping(tmp_path):
+    csv_path = tmp_path / "no_profit_alias.csv"
+    csv_path.write_text(
+        "Time,Operation,Symbol,Result\n2024.01.01,buy,EURUSD,50.00\n",
+        encoding="utf-8",
+    )
+
+    inspection = inspect_deals_csv_columns(csv_path)
+    by_header = {c.raw_header: c for c in inspection.columns}
+    assert by_header["Result"].canonical_field is None
+    assert any("no profit column was resolved" in w.lower() for w in inspection.warnings)
+    assert "map the profit column" in inspection.suggested_next_action.lower()
+
+
+def test_inspect_columns_rejects_unknown_canonical_key_in_column_map_overrides():
+    with pytest.raises(DealsParseError):
+        inspect_deals_csv_columns(
+            FIXTURES / "custom_header_deals.csv",
+            column_map_overrides={"foo": "Bar"},
+        )
+
+
+def test_inspect_columns_rejects_unknown_canonical_key_in_direct_overrides():
+    with pytest.raises(DealsParseError):
+        inspect_deals_csv_columns(
+            FIXTURES / "custom_header_deals.csv",
+            direct_overrides={"foo": "Bar"},
+        )

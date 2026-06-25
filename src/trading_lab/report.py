@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 from . import __version__
+from .csv_deals import ColumnInspection
 from .metrics import DealsMetrics, Metrics
 from .recommend import PASS_TO_DEMO, REJECT, Recommendation, Thresholds
 
@@ -263,3 +264,40 @@ def render_deals_markdown(
     )
 
     return "\n".join(lines) + "\n"
+
+
+def render_column_inspection(inspection: ColumnInspection) -> str:
+    lines: List[str] = []
+
+    lines.append("CSV column inspection")
+    lines.append(f"File: {inspection.path}")
+    lines.append(f"Delimiter: {inspection.delimiter}")
+    lines.append("")
+
+    header_label, canonical_label, source_label = "Raw header", "Canonical field", "Source"
+    raw_width = max([len(header_label)] + [len(c.raw_header) for c in inspection.columns]) + 4
+    canonical_width = (
+        max([len(canonical_label)] + [len(c.canonical_field or "unmapped") for c in inspection.columns])
+        + 4
+    )
+
+    lines.append(f"{header_label:<{raw_width}}{canonical_label:<{canonical_width}}{source_label}")
+    lines.append("")
+    for column in inspection.columns:
+        canonical_display = column.canonical_field or "unmapped"
+        lines.append(f"{column.raw_header:<{raw_width}}{canonical_display:<{canonical_width}}{column.source}")
+    lines.append("")
+
+    lines.append("Warnings:")
+    lines.append("")
+    if inspection.warnings:
+        for warning in inspection.warnings:
+            lines.append(f"- {warning}")
+    else:
+        lines.append("- No issue detected.")
+    lines.append("")
+
+    lines.append("Suggested next action:")
+    lines.append(inspection.suggested_next_action)
+
+    return "\n".join(lines)

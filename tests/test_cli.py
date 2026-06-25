@@ -344,3 +344,141 @@ def test_analyze_deals_unknown_column_map_key_returns_error(tmp_path):
     )
 
     assert exit_code == 1
+
+
+def test_analyze_deals_list_columns_with_built_in_aliases(capsys):
+    exit_code = main(["analyze-deals", str(FIXTURES / "sample_deals.csv"), "--list-columns"])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "CSV column inspection" in captured.out
+    assert "built-in alias" in captured.out
+    assert "No issue detected." in captured.out
+    assert "Recommendation:" not in captured.out
+
+
+def test_analyze_deals_list_columns_with_column_map(capsys):
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--list-columns",
+            "--column-map",
+            str(FIXTURES / "custom_header_column_map.json"),
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "column-map" in captured.out
+    assert "No issue detected." in captured.out
+
+
+def test_analyze_deals_list_columns_with_direct_overrides(capsys):
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--list-columns",
+            "--profit-column",
+            "Result",
+            "--type-column",
+            "Operation",
+            "--entry-column",
+            "Entry Type",
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "direct override" in captured.out
+    assert "No issue detected." in captured.out
+
+
+def test_analyze_deals_list_columns_direct_override_wins_over_column_map(tmp_path, capsys):
+    decoy_map = tmp_path / "decoy_map.json"
+    decoy_map.write_text('{"profit": "Decoy"}', encoding="utf-8")
+
+    csv_path = tmp_path / "decoy_deals.csv"
+    csv_path.write_text("Result,Decoy\n50.00,9999.00\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(csv_path),
+            "--list-columns",
+            "--column-map",
+            str(decoy_map),
+            "--profit-column",
+            "Result",
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Result" in captured.out
+    assert "direct override" in captured.out
+    decoy_line = next(line for line in captured.out.splitlines() if line.startswith("Decoy"))
+    assert "unmapped" in decoy_line
+
+
+def test_analyze_deals_list_columns_warns_on_profit_only_override(capsys):
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--list-columns",
+            "--profit-column",
+            "Result",
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "filtering" in captured.out.lower() or "type and entry" in captured.out.lower()
+    assert "Operation" in captured.out
+
+
+def test_analyze_deals_list_columns_does_not_create_report_file(tmp_path):
+    out_path = tmp_path / "deals_report.md"
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "sample_deals.csv"),
+            "--out",
+            str(out_path),
+            "--list-columns",
+        ]
+    )
+
+    assert exit_code == 0
+    assert not out_path.exists()
+
+
+def test_analyze_deals_list_columns_invalid_column_map_returns_error(tmp_path):
+    bad_map = tmp_path / "bad.json"
+    bad_map.write_text("{not valid json", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--list-columns",
+            "--column-map",
+            str(bad_map),
+        ]
+    )
+
+    assert exit_code == 1
+
+
+def test_analyze_deals_list_columns_missing_file_returns_error(tmp_path):
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(tmp_path / "does_not_exist.csv"),
+            "--list-columns",
+        ]
+    )
+
+    assert exit_code == 1
