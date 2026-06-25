@@ -77,3 +77,85 @@ def test_no_closed_deal_rows_is_rejected(tmp_path):
 
     with pytest.raises(DealsParseError):
         parse_deals_csv(csv_path)
+
+
+def test_balance_and_deposit_rows_are_not_counted_as_trades(tmp_path):
+    csv_path = tmp_path / "with_balance.csv"
+    csv_path.write_text(
+        "Time,Type,Symbol,Profit,Entry\n"
+        "2024.01.01 00:00:00,balance,,10000.00,\n"
+        "2024.01.02 00:00:00,deposit,,500.00,\n"
+        "2024.01.03 09:00:00,buy,EURUSD,50.00,out\n"
+        "2024.01.04 09:00:00,sell,EURUSD,-20.00,out\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_deals_csv(csv_path)
+    assert len(parsed.deals) == 2
+    assert {d.profit for d in parsed.deals} == {50.00, -20.00}
+    assert any("non-trade history row" in w.lower() for w in parsed.warnings)
+
+
+def test_credit_and_withdrawal_rows_are_not_counted_as_trades(tmp_path):
+    csv_path = tmp_path / "with_credit.csv"
+    csv_path.write_text(
+        "Time,Type,Symbol,Profit,Entry\n"
+        "2024.01.01 00:00:00,credit,,100.00,\n"
+        "2024.01.02 00:00:00,withdrawal,,-200.00,\n"
+        "2024.01.03 09:00:00,buy,EURUSD,30.00,out\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_deals_csv(csv_path)
+    assert len(parsed.deals) == 1
+    assert parsed.deals[0].profit == pytest.approx(30.00)
+    assert any("non-trade history row" in w.lower() for w in parsed.warnings)
+
+
+def test_commission_and_fee_only_rows_are_not_counted_as_trades(tmp_path):
+    csv_path = tmp_path / "with_fees.csv"
+    csv_path.write_text(
+        "Time,Type,Symbol,Profit,Entry\n"
+        "2024.01.01 00:00:00,commission,,-5.00,\n"
+        "2024.01.02 00:00:00,monthly fee,,-1.00,\n"
+        "2024.01.03 00:00:00,daily interest,,0.50,\n"
+        "2024.01.04 09:00:00,buy,EURUSD,40.00,out\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_deals_csv(csv_path)
+    assert len(parsed.deals) == 1
+    assert parsed.deals[0].profit == pytest.approx(40.00)
+    assert any("non-trade history row" in w.lower() for w in parsed.warnings)
+
+
+def test_normal_buy_sell_out_rows_are_still_counted_correctly(tmp_path):
+    csv_path = tmp_path / "normal_trades.csv"
+    csv_path.write_text(
+        "Time,Type,Symbol,Profit,Entry\n"
+        "2024.01.01 09:00:00,buy,EURUSD,0.00,in\n"
+        "2024.01.01 10:00:00,buy,EURUSD,50.00,out\n"
+        "2024.01.02 09:00:00,sell,EURUSD,0.00,in\n"
+        "2024.01.02 10:00:00,sell,EURUSD,-20.00,out\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_deals_csv(csv_path)
+    assert len(parsed.deals) == 2
+    assert parsed.deals[0].profit == pytest.approx(50.00)
+    assert parsed.deals[1].profit == pytest.approx(-20.00)
+
+
+def test_all_non_trade_rows_is_rejected(tmp_path):
+    csv_path = tmp_path / "all_non_trade.csv"
+    csv_path.write_text(
+        "Time,Type,Symbol,Profit,Entry\n"
+        "2024.01.01 00:00:00,balance,,10000.00,\n"
+        "2024.01.02 00:00:00,deposit,,500.00,\n"
+        "2024.01.03 00:00:00,credit,,50.00,\n"
+        "2024.01.04 00:00:00,withdrawal,,-100.00,\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DealsParseError):
+        parse_deals_csv(csv_path)

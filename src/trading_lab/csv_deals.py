@@ -79,6 +79,35 @@ def _slugify(label: str) -> str:
     return slug.strip("_")
 
 
+# Type-column values that mark a history row as a non-trade account
+# operation (deposits, withdrawals, broker credits/fees, ...) rather than a
+# closed trade/deal. Matched as whole tokens of the slugified value so that
+# e.g. "Daily Interest" or "Monthly fee" are caught without false-matching
+# trade types such as "buy limit".
+_NON_TRADE_TYPE_TOKENS = {
+    "balance",
+    "deposit",
+    "withdrawal",
+    "credit",
+    "correction",
+    "charge",
+    "commission",
+    "daily",
+    "monthly",
+    "fee",
+    "tax",
+    "dividend",
+    "interest",
+}
+
+
+def _is_non_trade_type(type_value: str) -> bool:
+    slug = _slugify(type_value)
+    if not slug:
+        return False
+    return bool(set(slug.split("_")) & _NON_TRADE_TYPE_TOKENS)
+
+
 def _read_text(path: Path) -> str:
     raw = path.read_bytes()
     if raw.startswith(b"\xef\xbb\xbf"):
@@ -144,8 +173,10 @@ def parse_deals_csv(path) -> ParsedDeals:
             "'Profit', 'P/L', or 'Net Profit'."
         )
 
+    has_type_column = "type" in canonical_header
     has_entry_column = "entry" in canonical_header
     skipped_opening_deals = 0
+    skipped_non_trade_rows = 0
     deals: List[Deal] = []
 
     for row_index, raw_row in enumerate(rows[1:], start=2):
@@ -157,6 +188,17 @@ def parse_deals_csv(path) -> ParsedDeals:
             if col_name and col_name not in record:
                 record[col_name] = value.strip()
 
+        # Non-trade account operations (balance/deposit/withdrawal/credit/fee/...)
+        # are filtered out before profit parsing, since MT5 history exports often
+        # put a real dollar amount in the Profit column for these rows too.
+        if has_type_column and _is_non_trade_type(record.get("type", "")):
+            skipped_non_trade_rows += 1
+            continue
+
+        if has_entry_column and _slugify(record.get("entry", "")) == "in":
+            skipped_opening_deals += 1
+            continue  # position-opening deal; never carries a realized profit
+
         profit_raw = record.get("profit", "")
         if profit_raw == "":
             continue  # no profit on this row (e.g. a totals/footer line)
@@ -166,10 +208,6 @@ def parse_deals_csv(path) -> ParsedDeals:
             raise DealsParseError(
                 f"Row {row_index}: could not parse profit value {profit_raw!r} as a number."
             )
-
-        if has_entry_column and _slugify(record.get("entry", "")) == "in":
-            skipped_opening_deals += 1
-            continue  # position-opening deal; never carries a realized profit
 
         deals.append(
             Deal(
@@ -188,6 +226,8 @@ def parse_deals_csv(path) -> ParsedDeals:
         )
 
     warnings: List[str] = []
+    if skipped_non_trade_rows:
+        warnings.append(f"Skipped {skipped_non_trade_rows} non-trade history row(s).")
     if skipped_opening_deals:
         warnings.append(
             f"Skipped {skipped_opening_deals} position-opening ('in') deal row(s); "
