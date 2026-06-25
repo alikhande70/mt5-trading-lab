@@ -1,0 +1,11 @@
+{
+  "time": "Close Time",
+  "symbol": "Instrument",
+  "volume": "Lots",
+  "type": "Operation",
+  "entry": "Entry Type",
+  "profit": "Result",
+  "commission": "Fee",
+  "swap": "Overnight",
+  "comment": "Note"
+}

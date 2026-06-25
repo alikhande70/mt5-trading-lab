@@ -209,3 +209,120 @@ def test_analyze_deals_custom_thresholds_change_outcome(tmp_path):
     )
     content = out_path.read_text(encoding="utf-8")
     assert "NEEDS_REVIEW" in content
+
+
+def test_analyze_deals_with_column_map_json(tmp_path):
+    out_path = tmp_path / "deals_report.md"
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--out",
+            str(out_path),
+            "--column-map",
+            str(FIXTURES / "custom_header_column_map.json"),
+        ]
+    )
+
+    assert exit_code == 0
+    content = out_path.read_text(encoding="utf-8")
+    assert "Total trades" in content
+
+
+def test_analyze_deals_with_direct_column_overrides(tmp_path):
+    out_path = tmp_path / "deals_report.md"
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--out",
+            str(out_path),
+            "--profit-column",
+            "Result",
+            "--type-column",
+            "Operation",
+            "--entry-column",
+            "Entry Type",
+            "--symbol-column",
+            "Instrument",
+            "--volume-column",
+            "Lots",
+            "--commission-column",
+            "Fee",
+            "--swap-column",
+            "Overnight",
+            "--comment-column",
+            "Note",
+        ]
+    )
+
+    assert exit_code == 0
+    content = out_path.read_text(encoding="utf-8")
+    assert "Total trades" in content
+
+
+def test_analyze_deals_direct_override_wins_over_column_map(tmp_path):
+    # Decoy column map points "profit" at the wrong header; the direct
+    # --profit-column flag must win and produce the correct result.
+    decoy_map = tmp_path / "decoy_map.json"
+    decoy_map.write_text('{"profit": "Decoy"}', encoding="utf-8")
+
+    csv_path = tmp_path / "decoy_deals.csv"
+    csv_path.write_text(
+        "Result,Decoy\n50.00,9999.00\n-20.00,8888.00\n",
+        encoding="utf-8",
+    )
+
+    out_path = tmp_path / "deals_report.md"
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(csv_path),
+            "--out",
+            str(out_path),
+            "--column-map",
+            str(decoy_map),
+            "--profit-column",
+            "Result",
+        ]
+    )
+
+    assert exit_code == 0
+    content = out_path.read_text(encoding="utf-8")
+    assert "9999" not in content
+    assert "8888" not in content
+
+
+def test_analyze_deals_missing_column_map_file_returns_error(tmp_path):
+    out_path = tmp_path / "deals_report.md"
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--out",
+            str(out_path),
+            "--column-map",
+            str(tmp_path / "does_not_exist.json"),
+        ]
+    )
+
+    assert exit_code == 1
+
+
+def test_analyze_deals_unknown_column_map_key_returns_error(tmp_path):
+    bad_map = tmp_path / "bad_map.json"
+    bad_map.write_text('{"foo": "Bar"}', encoding="utf-8")
+
+    out_path = tmp_path / "deals_report.md"
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--out",
+            str(out_path),
+            "--column-map",
+            str(bad_map),
+        ]
+    )
+
+    assert exit_code == 1

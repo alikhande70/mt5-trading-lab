@@ -4,14 +4,18 @@ MT5 lets a user export their closed-trade history as CSV from the terminal's
 History tab or the Strategy Tester's Deals tab. Column names, delimiter, and
 number formatting vary by broker, terminal language, and export method, so
 this module normalizes a handful of common variants rather than assuming one
-fixed layout. Only the standard library ``csv`` module is used, consistent
-with the project's zero-runtime-dependency design.
+fixed layout. For exports whose headers don't match any built-in alias, a
+caller can pass ``column_overrides`` (canonical field name -> exact CSV
+header label) to ``parse_deals_csv``, optionally loaded from a JSON file via
+``load_column_map``. Only the standard library (``csv``, ``json``) is used,
+consistent with the project's zero-runtime-dependency design.
 """
 
 from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -77,6 +81,62 @@ _CANONICAL_BY_ALIAS: Dict[str, str] = {
 def _slugify(label: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", label.strip().lower())
     return slug.strip("_")
+
+
+# Canonical field names that a column map / CLI override is allowed to
+# target. Kept identical to the canonical values produced by
+# `_CANONICAL_BY_ALIAS` above; anything else is rejected with a clear error
+# rather than silently ignored.
+CANONICAL_TARGETS = frozenset(
+    {
+        "time",
+        "type",
+        "symbol",
+        "volume",
+        "profit",
+        "commission",
+        "swap",
+        "ticket",
+        "order",
+        "deal",
+        "entry",
+        "comment",
+    }
+)
+
+
+def load_column_map(path) -> Dict[str, str]:
+    """Load a JSON column map file: canonical field name -> CSV header label."""
+    path = Path(path)
+    if not path.exists():
+        raise DealsParseError(f"Column map file not found: {path}")
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError as exc:
+        raise DealsParseError(f"Column map file {path} is not valid UTF-8 text.") from exc
+    except json.JSONDecodeError as exc:
+        raise DealsParseError(f"Column map file {path} is not valid JSON: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise DealsParseError(
+            f"Column map file {path} must contain a JSON object mapping canonical "
+            "field names to CSV header labels."
+        )
+
+    column_map: Dict[str, str] = {}
+    for key, value in data.items():
+        if key not in CANONICAL_TARGETS:
+            raise DealsParseError(
+                f"Unknown canonical column name {key!r} in column map {path}. "
+                f"Expected one of: {', '.join(sorted(CANONICAL_TARGETS))}."
+            )
+        if not isinstance(value, str) or not value.strip():
+            raise DealsParseError(
+                f"Column map entry {key!r} in {path} must be a non-empty string header label."
+            )
+        column_map[key] = value
+    return column_map
 
 
 # Type-column values that mark a history row as a non-trade account
@@ -151,7 +211,7 @@ def _to_float(token: Optional[str]) -> Optional[float]:
         return None
 
 
-def parse_deals_csv(path) -> ParsedDeals:
+def parse_deals_csv(path, column_overrides: Optional[Dict[str, str]] = None) -> ParsedDeals:
     path = Path(path)
     text = _read_text(path)
 
@@ -166,11 +226,28 @@ def parse_deals_csv(path) -> ParsedDeals:
         raise DealsParseError("The CSV file is empty.")
 
     header = rows[0]
-    canonical_header = [_CANONICAL_BY_ALIAS.get(_slugify(col)) for col in header]
+
+    # column_overrides (from --column-map and/or direct --*-column flags)
+    # take precedence over the built-in alias table, so a broker/locale with
+    # non-standard headers can still be parsed without editing the CSV.
+    override_by_slug: Dict[str, str] = {}
+    for canonical, label in (column_overrides or {}).items():
+        if canonical not in CANONICAL_TARGETS:
+            raise DealsParseError(
+                f"Unknown canonical column name {canonical!r} in column overrides. "
+                f"Expected one of: {', '.join(sorted(CANONICAL_TARGETS))}."
+            )
+        override_by_slug[_slugify(label)] = canonical
+
+    canonical_header = [
+        override_by_slug.get(_slugify(col)) or _CANONICAL_BY_ALIAS.get(_slugify(col))
+        for col in header
+    ]
     if "profit" not in canonical_header:
         raise DealsParseError(
             "No usable profit column was found. Expected a column such as "
-            "'Profit', 'P/L', or 'Net Profit'."
+            "'Profit', 'P/L', or 'Net Profit', or pass --column-map / --profit-column "
+            "for a non-standard header."
         )
 
     has_type_column = "type" in canonical_header

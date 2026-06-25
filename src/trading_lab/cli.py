@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Dict, Optional, Sequence
 
 from . import __version__
-from .csv_deals import DealsParseError, parse_deals_csv
+from .csv_deals import DealsParseError, load_column_map, parse_deals_csv
 from .html_report import ReportParseError, parse_html_report
 from .metrics import compute_deals_metrics, compute_metrics
 from .recommend import Thresholds, evaluate, evaluate_core
@@ -102,6 +102,57 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Thresholds.max_drawdown_pct,
         help=f"Relative drawdown comfort threshold, in percent (default: {Thresholds.max_drawdown_pct}).",
     )
+    analyze_deals.add_argument(
+        "--column-map",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a JSON file mapping canonical field names (profit, type, "
+            "entry, symbol, volume, commission, swap, comment, time, ticket, "
+            "order, deal) to this CSV's actual header labels. Use this for "
+            "exports whose column names don't match the built-in English aliases."
+        ),
+    )
+    analyze_deals.add_argument(
+        "--profit-column",
+        default=None,
+        help="Exact CSV header label for the profit column (overrides built-in aliases and --column-map).",
+    )
+    analyze_deals.add_argument(
+        "--type-column",
+        default=None,
+        help="Exact CSV header label for the deal/order type column (overrides built-in aliases and --column-map).",
+    )
+    analyze_deals.add_argument(
+        "--entry-column",
+        default=None,
+        help="Exact CSV header label for the entry (in/out) column (overrides built-in aliases and --column-map).",
+    )
+    analyze_deals.add_argument(
+        "--symbol-column",
+        default=None,
+        help="Exact CSV header label for the symbol/instrument column (overrides built-in aliases and --column-map).",
+    )
+    analyze_deals.add_argument(
+        "--volume-column",
+        default=None,
+        help="Exact CSV header label for the volume/lots column (overrides built-in aliases and --column-map).",
+    )
+    analyze_deals.add_argument(
+        "--commission-column",
+        default=None,
+        help="Exact CSV header label for the commission column (overrides built-in aliases and --column-map).",
+    )
+    analyze_deals.add_argument(
+        "--swap-column",
+        default=None,
+        help="Exact CSV header label for the swap column (overrides built-in aliases and --column-map).",
+    )
+    analyze_deals.add_argument(
+        "--comment-column",
+        default=None,
+        help="Exact CSV header label for the comment column (overrides built-in aliases and --column-map).",
+    )
     analyze_deals.set_defaults(handler=_handle_analyze_deals)
 
     return parser
@@ -140,8 +191,31 @@ def _handle_analyze_deals(args: argparse.Namespace) -> int:
         print(f"error: deals CSV file not found: {args.deals_path}", file=sys.stderr)
         return 1
 
+    column_overrides: Dict[str, str] = {}
+    if args.column_map is not None:
+        try:
+            column_overrides.update(load_column_map(args.column_map))
+        except DealsParseError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    # Direct --*-column flags override both the built-in aliases and --column-map.
+    direct_overrides = {
+        "profit": args.profit_column,
+        "type": args.type_column,
+        "entry": args.entry_column,
+        "symbol": args.symbol_column,
+        "volume": args.volume_column,
+        "commission": args.commission_column,
+        "swap": args.swap_column,
+        "comment": args.comment_column,
+    }
+    for canonical, label in direct_overrides.items():
+        if label:
+            column_overrides[canonical] = label
+
     try:
-        parsed = parse_deals_csv(args.deals_path)
+        parsed = parse_deals_csv(args.deals_path, column_overrides=column_overrides or None)
     except DealsParseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
