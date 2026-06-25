@@ -40,6 +40,33 @@ VPS.
 4. Open `report.md`. It contains the extracted metrics, the thresholds used,
    and a recommendation with the specific reasons behind it.
 
+### Analyzing a raw CSV deals/trades export (v0.2.0+)
+
+The HTML summary report only gives you MT5's own aggregate figures. If you
+want metrics recomputed directly from the trade ledger, export your closed
+trades/deals as CSV (MT5 **History** tab or Strategy Tester **Deals** tab →
+right-click → **Save as Report (CSV)**) and run:
+
+```bash
+python -m trading_lab analyze-deals path/to/deals.csv --out deals_report.md
+```
+
+Optional flags:
+
+```bash
+python -m trading_lab analyze-deals deals.csv \
+  --out deals_report.md \
+  --initial-balance 10000 \
+  --min-trades 30 \
+  --min-profit-factor 1.5 \
+  --max-drawdown-pct 20
+```
+
+`--initial-balance` is optional. Without it, the absolute drawdown amount is
+still computed, but percentage drawdown is reported as unavailable rather
+than guessed. Run `python -m trading_lab analyze-deals --help` for the full
+list of flags.
+
 ## Installation
 
 Requires Python 3.9+. No external runtime dependencies.
@@ -80,15 +107,26 @@ scoring service, and no hidden logic.
 ```
 src/trading_lab/
   html_report.py   # parses MT5 Strategy Tester .htm/.html exports
+  csv_deals.py      # parses MT5 deals/trades CSV exports
   metrics.py        # turns parsed fields into typed metrics
   recommend.py      # PASS_TO_DEMO / NEEDS_REVIEW / REJECT rules
-  report.py         # renders the Markdown report
-  cli.py            # `analyze-report` command
+  report.py         # renders the Markdown reports
+  cli.py            # `analyze-report` / `analyze-deals` commands
 tests/
-  fixtures/         # sample Strategy Tester report exports used in tests
+  fixtures/         # sample Strategy Tester report and CSV deals exports used in tests
 ```
 
-## Out of scope for v0.1.0
+## Known limitations
+
+- MT5 CSV exports vary by broker, terminal language, and export method
+  (column names, delimiter, decimal/thousands formatting all differ).
+  `analyze-deals` normalizes a set of common **English** MT5 CSV layouts; a
+  CSV with an unrecognized profit column or an unfamiliar layout may need
+  manual column renaming in a later version.
+- No broker connection or live/demo trading is performed by either CLI
+  command — both are local file-in / file-out analyzers only.
+
+## Out of scope for v0.1.0+
 
 - Live trading or order execution of any kind.
 - Broker account connections or password handling.
