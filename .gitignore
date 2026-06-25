@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+.DS_Store
+
+# Generated reports / user-supplied broker exports (local artifacts, not source)
+/reports/
+*.htm
+*.html
+!tests/fixtures/**/*.htm
+!tests/fixtures/**/*.html
