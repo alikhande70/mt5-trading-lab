@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## Next - unreleased
+
+### Added
+
+- JSON output for CSV audit commands:
+  - `analyze-deals --list-columns --format json`
+  - `analyze-deals --preview-rows --format json`
+
 ## v0.5.0 - unreleased
 
 ### Added

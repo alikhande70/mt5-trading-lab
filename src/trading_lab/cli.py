@@ -18,7 +18,14 @@ from .csv_deals import (
 from .html_report import ReportParseError, parse_html_report
 from .metrics import compute_deals_metrics, compute_metrics
 from .recommend import Thresholds, evaluate, evaluate_core
-from .report import render_column_inspection, render_deals_markdown, render_markdown, render_row_preview
+from .report import (
+    render_column_inspection,
+    render_column_inspection_json,
+    render_deals_markdown,
+    render_markdown,
+    render_row_preview,
+    render_row_preview_json,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -186,6 +193,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default=50,
         help="Maximum number of data rows to classify/display with --preview-rows (default: 50).",
     )
+    analyze_deals.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help=(
+            "Output format for --list-columns / --preview-rows (default: text). "
+            "JSON is intended for scripts and CI checks; not yet supported for the "
+            "full analysis report."
+        ),
+    )
     analyze_deals.set_defaults(handler=_handle_analyze_deals)
 
     return parser
@@ -228,6 +245,13 @@ def _handle_analyze_deals(args: argparse.Namespace) -> int:
         print("error: --max-preview-rows must be a positive integer.", file=sys.stderr)
         return 1
 
+    if args.format == "json" and not (args.list_columns or args.preview_rows):
+        print(
+            "error: --format json is currently supported only with --list-columns or --preview-rows.",
+            file=sys.stderr,
+        )
+        return 1
+
     if not args.deals_path.exists():
         print(f"error: deals CSV file not found: {args.deals_path}", file=sys.stderr)
         return 1
@@ -266,7 +290,10 @@ def _handle_analyze_deals(args: argparse.Namespace) -> int:
         except DealsParseError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        print(render_column_inspection(inspection))
+        if args.format == "json":
+            print(render_column_inspection_json(inspection))
+        else:
+            print(render_column_inspection(inspection))
         return 0
 
     column_overrides = {**column_map_overrides, **direct_overrides}
@@ -281,7 +308,10 @@ def _handle_analyze_deals(args: argparse.Namespace) -> int:
         except DealsParseError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        print(render_row_preview(result))
+        if args.format == "json":
+            print(render_row_preview_json(result))
+        else:
+            print(render_row_preview(result))
         return 1 if result.summary.malformed_profit_rows else 0
 
     try:
