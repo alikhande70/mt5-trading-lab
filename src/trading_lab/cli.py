@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from . import __version__
+from .csv_deals import DealsParseError, parse_deals_csv
 from .html_report import ReportParseError, parse_html_report
-from .metrics import compute_metrics
-from .recommend import Thresholds, evaluate
-from .report import render_markdown
+from .metrics import compute_deals_metrics, compute_metrics
+from .recommend import Thresholds, evaluate, evaluate_core
+from .report import render_deals_markdown, render_markdown
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -62,6 +63,47 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     analyze.set_defaults(handler=_handle_analyze_report)
 
+    analyze_deals = subparsers.add_parser(
+        "analyze-deals",
+        help="Parse an MT5 deals/trades CSV export and write a local Markdown recommendation.",
+    )
+    analyze_deals.add_argument(
+        "deals_path",
+        type=Path,
+        help="Path to the deals/trades CSV exported from MT5 (History tab or Strategy Tester).",
+    )
+    analyze_deals.add_argument(
+        "--out",
+        type=Path,
+        default=Path("deals_report.md"),
+        help="Where to write the Markdown report (default: deals_report.md).",
+    )
+    analyze_deals.add_argument(
+        "--initial-balance",
+        type=float,
+        default=None,
+        help="Starting account balance, used to compute percentage drawdown (optional).",
+    )
+    analyze_deals.add_argument(
+        "--min-trades",
+        type=int,
+        default=Thresholds.min_trades,
+        help=f"Minimum trade count for a meaningful sample (default: {Thresholds.min_trades}).",
+    )
+    analyze_deals.add_argument(
+        "--min-profit-factor",
+        type=float,
+        default=Thresholds.min_profit_factor,
+        help=f"Profit factor comfort threshold (default: {Thresholds.min_profit_factor}).",
+    )
+    analyze_deals.add_argument(
+        "--max-drawdown-pct",
+        type=float,
+        default=Thresholds.max_drawdown_pct,
+        help=f"Relative drawdown comfort threshold, in percent (default: {Thresholds.max_drawdown_pct}).",
+    )
+    analyze_deals.set_defaults(handler=_handle_analyze_deals)
+
     return parser
 
 
@@ -84,6 +126,49 @@ def _handle_analyze_report(args: argparse.Namespace) -> int:
     )
     recommendation = evaluate(metrics, thresholds)
     markdown = render_markdown(args.report_path, metrics, recommendation, thresholds)
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(markdown, encoding="utf-8")
+
+    print(f"Recommendation: {recommendation.verdict}")
+    print(f"Report written to: {args.out}")
+    return 0
+
+
+def _handle_analyze_deals(args: argparse.Namespace) -> int:
+    if not args.deals_path.exists():
+        print(f"error: deals CSV file not found: {args.deals_path}", file=sys.stderr)
+        return 1
+
+    try:
+        parsed = parse_deals_csv(args.deals_path)
+    except DealsParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    metrics = compute_deals_metrics(parsed, initial_balance=args.initial_balance)
+    thresholds = Thresholds(
+        min_trades=args.min_trades,
+        min_profit_factor=args.min_profit_factor,
+        max_drawdown_pct=args.max_drawdown_pct,
+    )
+    recommendation = evaluate_core(
+        total_trades=metrics.total_trades,
+        net_profit=metrics.net_profit,
+        profit_factor=metrics.profit_factor,
+        drawdown_pct=metrics.max_drawdown_pct,
+        recovery_factor=None,
+        thresholds=thresholds,
+    )
+
+    warnings = list(parsed.warnings)
+    if args.initial_balance is None:
+        warnings.append(
+            "No --initial-balance provided; percentage drawdown is unavailable "
+            "(only the absolute drawdown amount was computed)."
+        )
+
+    markdown = render_deals_markdown(args.deals_path, metrics, recommendation, thresholds, warnings)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(markdown, encoding="utf-8")

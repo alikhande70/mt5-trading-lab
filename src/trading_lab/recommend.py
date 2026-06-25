@@ -1,14 +1,18 @@
 """Rule-based, explainable PASS_TO_DEMO / NEEDS_REVIEW / REJECT recommendation.
 
-Everything here runs locally against the metrics already extracted from the
-report. There is no network call, no broker connection, and no trade
-execution involved at any point.
+Everything here runs locally against the metrics already extracted from a
+report or recomputed from a CSV trade ledger. There is no network call, no
+broker connection, and no trade execution involved at any point.
+
+The verdict logic lives in :func:`evaluate_core`, which takes a handful of
+scalar inputs. Both the HTML summary path (:func:`evaluate`) and the CSV deals
+path feed it the same five numbers, so the rules stay in one place.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from .metrics import Metrics
 
@@ -36,7 +40,19 @@ class Recommendation:
     passed: List[str] = field(default_factory=list)
 
 
-def evaluate(metrics: Metrics, thresholds: Thresholds = Thresholds()) -> Recommendation:
+def evaluate_core(
+    total_trades: Optional[int],
+    net_profit: Optional[float],
+    profit_factor: Optional[float],
+    drawdown_pct: Optional[float],
+    recovery_factor: Optional[float],
+    thresholds: Thresholds = Thresholds(),
+) -> Recommendation:
+    """Apply the verdict rules to a normalized set of scalar metrics.
+
+    ``drawdown_pct`` may be ``None`` (e.g. a CSV without an initial balance);
+    the drawdown rule is simply skipped in that case rather than failing.
+    """
     verdict = PASS_TO_DEMO
     reasons: List[str] = []
     passed: List[str] = []
@@ -47,76 +63,73 @@ def evaluate(metrics: Metrics, thresholds: Thresholds = Thresholds()) -> Recomme
         if _SEVERITY[new_verdict] > _SEVERITY[verdict]:
             verdict = new_verdict
 
-    if metrics.total_trades is None or metrics.total_net_profit is None or metrics.profit_factor is None:
+    if total_trades is None or net_profit is None or profit_factor is None:
         escalate(
             NEEDS_REVIEW,
             "Core metrics (total trades, net profit, or profit factor) could not be read "
             "from the report; review it manually.",
         )
 
-    if metrics.total_trades is not None:
-        if metrics.total_trades < thresholds.min_trades:
+    if total_trades is not None:
+        if total_trades < thresholds.min_trades:
             escalate(
                 NEEDS_REVIEW,
-                f"Only {metrics.total_trades} trades in the test, below the "
+                f"Only {total_trades} trades in the test, below the "
                 f"{thresholds.min_trades}-trade minimum for a statistically meaningful sample.",
             )
         else:
-            passed.append(f"Sample size OK: {metrics.total_trades} trades (>= {thresholds.min_trades}).")
+            passed.append(f"Sample size OK: {total_trades} trades (>= {thresholds.min_trades}).")
 
-    if metrics.total_net_profit is not None:
-        if metrics.total_net_profit <= 0:
-            escalate(REJECT, f"Net loss over the test period ({metrics.total_net_profit:.2f}).")
+    if net_profit is not None:
+        if net_profit <= 0:
+            escalate(REJECT, f"Net loss over the test period ({net_profit:.2f}).")
         else:
-            passed.append(f"Net profit is positive ({metrics.total_net_profit:.2f}).")
+            passed.append(f"Net profit is positive ({net_profit:.2f}).")
 
-    if metrics.profit_factor is not None:
-        if metrics.profit_factor < thresholds.reject_profit_factor:
-            escalate(REJECT, f"Profit factor {metrics.profit_factor:.2f} is below 1.0 (losing strategy).")
-        elif metrics.profit_factor < thresholds.min_profit_factor:
+    if profit_factor is not None:
+        if profit_factor < thresholds.reject_profit_factor:
+            escalate(REJECT, f"Profit factor {profit_factor:.2f} is below 1.0 (losing strategy).")
+        elif profit_factor < thresholds.min_profit_factor:
             escalate(
                 NEEDS_REVIEW,
-                f"Profit factor {metrics.profit_factor:.2f} is positive but below the "
+                f"Profit factor {profit_factor:.2f} is positive but below the "
                 f"{thresholds.min_profit_factor:.2f} comfort threshold.",
             )
         else:
             passed.append(
-                f"Profit factor {metrics.profit_factor:.2f} meets the "
+                f"Profit factor {profit_factor:.2f} meets the "
                 f"{thresholds.min_profit_factor:.2f} threshold."
             )
 
-    drawdown = metrics.balance_drawdown_relative_pct
-    if drawdown is None:
-        drawdown = metrics.equity_drawdown_relative_pct
-    if drawdown is not None:
-        if drawdown > thresholds.reject_drawdown_pct:
+    if drawdown_pct is not None:
+        if drawdown_pct > thresholds.reject_drawdown_pct:
             escalate(
                 REJECT,
-                f"Relative drawdown {drawdown:.2f}% exceeds the "
+                f"Relative drawdown {drawdown_pct:.2f}% exceeds the "
                 f"{thresholds.reject_drawdown_pct:.2f}% hard limit.",
             )
-        elif drawdown > thresholds.max_drawdown_pct:
+        elif drawdown_pct > thresholds.max_drawdown_pct:
             escalate(
                 NEEDS_REVIEW,
-                f"Relative drawdown {drawdown:.2f}% exceeds the "
+                f"Relative drawdown {drawdown_pct:.2f}% exceeds the "
                 f"{thresholds.max_drawdown_pct:.2f}% comfort threshold.",
             )
         else:
             passed.append(
-                f"Relative drawdown {drawdown:.2f}% is within the "
+                f"Relative drawdown {drawdown_pct:.2f}% is within the "
                 f"{thresholds.max_drawdown_pct:.2f}% comfort threshold."
             )
 
-    if metrics.recovery_factor is not None:
-        if metrics.recovery_factor < thresholds.min_recovery_factor:
+    if recovery_factor is not None:
+        if recovery_factor < thresholds.min_recovery_factor:
             escalate(
                 NEEDS_REVIEW,
-                f"Recovery factor {metrics.recovery_factor:.2f} is below the "
+                f"Recovery factor {recovery_factor:.2f} is below the "
                 f"{thresholds.min_recovery_factor:.2f} comfort threshold.",
             )
         else:
             passed.append(
-                f"Recovery factor {metrics.recovery_factor:.2f} meets the "
+                f"Recovery factor {recovery_factor:.2f} meets the "
                 f"{thresholds.min_recovery_factor:.2f} threshold."
             )
 
@@ -124,3 +137,18 @@ def evaluate(metrics: Metrics, thresholds: Thresholds = Thresholds()) -> Recomme
         reasons.append("All automated checks passed.")
 
     return Recommendation(verdict=verdict, reasons=reasons, passed=passed)
+
+
+def evaluate(metrics: Metrics, thresholds: Thresholds = Thresholds()) -> Recommendation:
+    """Evaluate metrics extracted from an MT5 Strategy Tester HTML summary."""
+    drawdown = metrics.balance_drawdown_relative_pct
+    if drawdown is None:
+        drawdown = metrics.equity_drawdown_relative_pct
+    return evaluate_core(
+        total_trades=metrics.total_trades,
+        net_profit=metrics.total_net_profit,
+        profit_factor=metrics.profit_factor,
+        drawdown_pct=drawdown,
+        recovery_factor=metrics.recovery_factor,
+        thresholds=thresholds,
+    )
