@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from trading_lab.csv_deals import DealsParseError, parse_deals_csv
+from trading_lab.csv_deals import DealsParseError, load_column_map, parse_deals_csv
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -159,3 +159,130 @@ def test_all_non_trade_rows_is_rejected(tmp_path):
 
     with pytest.raises(DealsParseError):
         parse_deals_csv(csv_path)
+
+
+def test_load_column_map_reads_valid_file():
+    column_map = load_column_map(FIXTURES / "custom_header_column_map.json")
+    assert column_map == {
+        "time": "Close Time",
+        "symbol": "Instrument",
+        "volume": "Lots",
+        "type": "Operation",
+        "entry": "Entry Type",
+        "profit": "Result",
+        "commission": "Fee",
+        "swap": "Overnight",
+        "comment": "Note",
+    }
+
+
+def test_load_column_map_rejects_missing_file(tmp_path):
+    with pytest.raises(DealsParseError):
+        load_column_map(tmp_path / "does_not_exist.json")
+
+
+def test_load_column_map_rejects_invalid_json(tmp_path):
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("{not valid json", encoding="utf-8")
+
+    with pytest.raises(DealsParseError):
+        load_column_map(bad_json)
+
+
+def test_load_column_map_rejects_unknown_canonical_key(tmp_path):
+    bad_map = tmp_path / "unknown_key.json"
+    bad_map.write_text('{"profit": "Result", "foo": "Bar"}', encoding="utf-8")
+
+    with pytest.raises(DealsParseError):
+        load_column_map(bad_map)
+
+
+def test_parse_deals_csv_rejects_unknown_canonical_key_in_overrides():
+    with pytest.raises(DealsParseError):
+        parse_deals_csv(
+            FIXTURES / "custom_header_deals.csv",
+            column_overrides={"foo": "Result"},
+        )
+
+
+def test_custom_header_csv_without_column_map_is_rejected():
+    # "Result" isn't one of the built-in profit aliases, so without an
+    # override the parser correctly has no usable profit column.
+    with pytest.raises(DealsParseError):
+        parse_deals_csv(FIXTURES / "custom_header_deals.csv")
+
+
+def test_column_map_resolves_non_standard_headers():
+    column_map = load_column_map(FIXTURES / "custom_header_column_map.json")
+    parsed = parse_deals_csv(FIXTURES / "custom_header_deals.csv", column_overrides=column_map)
+
+    # Full column map (profit + type + entry all mapped): only real closed
+    # trades are counted, same as the built-in-alias path.
+    assert len(parsed.deals) == 2
+    assert {d.profit for d in parsed.deals} == {50.00, -20.00}
+    assert parsed.deals[0].commission == pytest.approx(-2.00)
+    assert parsed.deals[0].swap == pytest.approx(-0.50)
+    assert parsed.deals[0].comment == "Closed in profit"
+    assert any("non-trade history row" in w.lower() for w in parsed.warnings)
+    assert any("position-opening" in w.lower() for w in parsed.warnings)
+    assert not any("filtering is unavailable" in w.lower() for w in parsed.warnings)
+
+
+def test_direct_column_override_resolves_custom_profit_header():
+    # Only overriding "profit" leaves type/entry unrecognized, so every row
+    # with a profit value is counted (no type/entry-based filtering) —
+    # including the "balance" row. This must NOT happen silently: both a
+    # type/entry-filtering warning and a suspicious-unmapped-header warning
+    # (for "Operation" and "Entry Type") are required.
+    parsed = parse_deals_csv(
+        FIXTURES / "custom_header_deals.csv",
+        column_overrides={"profit": "Result"},
+    )
+    assert len(parsed.deals) == 5
+    assert {d.profit for d in parsed.deals} == {5000.00, 0.00, 50.00, -20.00}
+    assert any("filtering is unavailable" in w.lower() for w in parsed.warnings)
+    assert any(
+        "operation" in w.lower() and "entry type" in w.lower() for w in parsed.warnings
+    )
+
+
+def test_full_direct_overrides_for_profit_type_entry_count_only_closed_trades():
+    # Mapping profit + type + entry directly (as --profit-column/--type-column/
+    # --entry-column would) restores full filtering: only real closed trades
+    # are counted, and the "filtering is unavailable" warning is not emitted.
+    parsed = parse_deals_csv(
+        FIXTURES / "custom_header_deals.csv",
+        column_overrides={
+            "profit": "Result",
+            "type": "Operation",
+            "entry": "Entry Type",
+        },
+    )
+    assert len(parsed.deals) == 2
+    assert {d.profit for d in parsed.deals} == {50.00, -20.00}
+    assert not any("filtering is unavailable" in w.lower() for w in parsed.warnings)
+    assert any("non-trade history row" in w.lower() for w in parsed.warnings)
+
+
+def test_built_in_aliases_still_work_without_column_overrides():
+    parsed = parse_deals_csv(FIXTURES / "sample_deals.csv")
+    assert len(parsed.deals) == 30
+    assert not any("filtering is unavailable" in w.lower() for w in parsed.warnings)
+
+
+def test_unmapped_operation_header_warns_even_without_column_overrides(tmp_path):
+    # No column_overrides at all here — "Operation" simply isn't a built-in
+    # alias. The suspicious-unmapped-header warning must still fire, since
+    # this is exactly the kind of column whose absence lets non-trade rows
+    # (like "balance" below) get counted as closed trades.
+    csv_path = tmp_path / "operation_unmapped.csv"
+    csv_path.write_text(
+        "Time,Operation,Symbol,Profit\n"
+        "2024.01.01 00:00:00,balance,,10000.00\n"
+        "2024.01.02 09:00:00,buy,EURUSD,50.00\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_deals_csv(csv_path)
+    assert len(parsed.deals) == 2
+    assert any("operation" in w.lower() for w in parsed.warnings)

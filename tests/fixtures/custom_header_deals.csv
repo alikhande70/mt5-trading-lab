@@ -1,0 +1,6 @@
+Close Time,Instrument,Lots,Operation,Entry Type,Result,Fee,Overnight,Note
+2024.01.01 00:00:00,,0.00,balance,,5000.00,0.00,0.00,Initial deposit
+2024.01.02 09:00:00,EURUSD,0.10,buy,in,0.00,0.00,0.00,
+2024.01.02 10:00:00,EURUSD,0.10,buy,out,50.00,-2.00,-0.50,Closed in profit
+2024.01.03 09:00:00,EURUSD,0.20,sell,in,0.00,0.00,0.00,
+2024.01.03 10:00:00,EURUSD,0.20,sell,out,-20.00,-2.00,-0.30,Closed in loss

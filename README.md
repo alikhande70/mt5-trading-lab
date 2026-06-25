@@ -67,6 +67,48 @@ still computed, but percentage drawdown is reported as unavailable rather
 than guessed. Run `python -m trading_lab analyze-deals --help` for the full
 list of flags.
 
+#### CSV exports with non-standard column names (v0.3.0+)
+
+If your broker, terminal language, or export method produces a deals CSV
+whose headers don't match any built-in English alias, point `analyze-deals`
+at a JSON column map instead of editing the CSV by hand:
+
+```bash
+python -m trading_lab analyze-deals deals.csv --out report.md \
+  --column-map column_map.json
+```
+
+`column_map.json` maps canonical field names to your CSV's actual header
+labels. Only these canonical names are recognized: `profit`, `type`,
+`entry`, `symbol`, `volume`, `commission`, `swap`, `comment`, `time`,
+`ticket`, `order`, `deal`.
+
+```json
+{
+  "profit": "Profit USD",
+  "type": "Operation",
+  "entry": "Entry",
+  "symbol": "Instrument",
+  "volume": "Lots",
+  "commission": "Commission",
+  "swap": "Swap",
+  "comment": "Comment"
+}
+```
+
+For a quick one-off override without a JSON file, use the matching
+`--*-column` flags, which take the exact CSV header label and override both
+the built-in aliases and `--column-map`:
+
+```bash
+python -m trading_lab analyze-deals deals.csv --out report.md \
+  --profit-column "Profit USD" --entry-column "Entry Type"
+```
+
+Available override flags: `--profit-column`, `--type-column`,
+`--entry-column`, `--symbol-column`, `--volume-column`,
+`--commission-column`, `--swap-column`, `--comment-column`.
+
 ## Installation
 
 Requires Python 3.9+. No external runtime dependencies.
@@ -107,7 +149,7 @@ scoring service, and no hidden logic.
 ```
 src/trading_lab/
   html_report.py   # parses MT5 Strategy Tester .htm/.html exports
-  csv_deals.py      # parses MT5 deals/trades CSV exports
+  csv_deals.py      # parses MT5 deals/trades CSV exports + column mapping
   metrics.py        # turns parsed fields into typed metrics
   recommend.py      # PASS_TO_DEMO / NEEDS_REVIEW / REJECT rules
   report.py         # renders the Markdown reports
