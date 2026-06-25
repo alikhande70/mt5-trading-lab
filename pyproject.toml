@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trading-lab"
-version = "0.1.0"
+version = "0.5.0"
 description = "Local-first analyzer for MetaTrader 5 Strategy Tester reports"
 readme = "README.md"
 requires-python = ">=3.9"

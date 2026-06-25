@@ -1,32 +1,98 @@
 # mt5-trading-lab
 
-A local-first toolkit for analyzing **MetaTrader 5 Strategy Tester** reports.
+A local-first toolkit for analyzing **MetaTrader 5 Strategy Tester** reports
+and trade history exports.
 
-`trading-lab` parses a report you export by hand from MT5, computes the
-metrics that matter for deciding whether a strategy is worth a demo run, and
-writes a plain Markdown summary with a recommendation:
+## What this project is
 
-- `PASS_TO_DEMO`
-- `NEEDS_REVIEW`
-- `REJECT`
+`trading-lab` is a command-line tool that:
 
-## Execution model (v0.1.0)
+- Parses a Strategy Tester report (`.htm`/`.html`) or a deals/trades CSV
+  that you export by hand from MT5.
+- Computes the metrics that matter for deciding whether a strategy is worth
+  a demo run: profit factor, drawdown, recovery factor, trade count, net
+  profit.
+- Writes a plain Markdown summary with one of three deterministic,
+  explainable verdicts:
+  - `PASS_TO_DEMO`
+  - `NEEDS_REVIEW`
+  - `REJECT`
+- Lets you inspect and audit how a CSV's columns and rows are interpreted
+  (`--list-columns`, `--preview-rows`) before trusting the final numbers.
 
-- **Local-only.** Runs entirely on your own Windows laptop/PC (or any OS with
-  Python — the report files themselves are portable).
+Everything runs on your own machine, on files you already exported. There
+is nothing to deploy, host, or keep running.
+
+## What this project is not
+
+- **Not a trading bot.** It does not generate trading signals or run a
+  strategy.
+- **Not an Expert Advisor.** It has no relationship to MT5's EA/MQL5
+  runtime.
+- **Not connected to MT5.** It never opens or talks to the MetaTrader 5
+  terminal; it only reads files you exported from it.
+- **Not connected to a broker.** No broker API, no broker session, of any
+  kind.
+- **Does not place orders.** There is no `order_send` and no order-related
+  code anywhere in this project (enforced by an automated test suite — see
+  [Safety model](#safety-model)).
+- **Does not manage live positions.** Nothing here opens, closes, modifies,
+  or monitors a live or demo position.
+- **Does not store account credentials.** No login, no password, no API
+  key, no secret is ever read, stored, or transmitted.
+- **Not financial advice.** The recommendation is a deterministic rule
+  applied to backtest metrics, not a guarantee of future results.
+
+## Safety model
+
+- **Local-only.** Runs entirely on your own laptop/PC (or any OS with
+  Python — the report/CSV files themselves are portable).
 - **Offline-first.** No network calls, no telemetry, no cloud service.
+- **File-in / file-out.** Every command reads a local file and either
+  writes a local Markdown file or prints to stdout. Nothing persists
+  between runs beyond the files you explicitly asked for.
 - **No VPS.** Nothing to deploy, host, or keep running 24/7.
-- **No broker connection.** No account login, no password handling, no
-  `order_send`, no live or automated trading of any kind.
+- **No background daemon.** Every command runs once and exits.
+- **No broker connection, no account credentials.** No login, no password
+  handling, no `order_send`, no live or automated trading of any kind.
+- **No required MCP dependency.** This project does not depend on
+  `metatrader5-mcp` or any other MCP server to function.
 - **MT5 does not need to stay open.** You run a backtest, export a report
-  file, and close the terminal. Analysis happens later, offline, on the file.
+  or CSV, and close the terminal. Analysis happens later, offline, on the
+  file.
 
-v0.1.0 deliberately does **not** integrate with `metatrader5-mcp` or any
-broker API. A future version may add that as an *optional* local
-integration, but the core CLI will keep working without it and without a
-VPS.
+These constraints are not just documentation — `tests/test_safety_invariants.py`
+inspects the source of `src/trading_lab/` (via Python's tokenizer/AST, not
+substring matching) and fails the test suite if anyone ever adds
+`order_send`, an execution-named function, credential handling, a
+network/server import, or an MCP dependency.
 
-## How it works
+## Installation
+
+Requires Python 3.9+. No external runtime dependencies.
+
+```bash
+pip install -e .
+```
+
+## Quick start
+
+```bash
+# HTML/HTM Strategy Tester report
+python -m trading_lab analyze-report path/to/report.htm --out report.md
+
+# CSV deals/trades export
+python -m trading_lab analyze-deals path/to/deals.csv --out deals_report.md
+```
+
+Open the generated Markdown file. It contains the extracted metrics, the
+thresholds used, and a recommendation with the specific reasons behind it.
+
+Run `python -m trading_lab --version` to check the installed version, and
+`python -m trading_lab <command> --help` for the full flag list of any
+command.
+
+## HTML report analysis
 
 1. Run a backtest in the MT5 Strategy Tester.
 2. Export the result: right-click the report → **Save as Report** → save as
@@ -40,7 +106,19 @@ VPS.
 4. Open `report.md`. It contains the extracted metrics, the thresholds used,
    and a recommendation with the specific reasons behind it.
 
-### Analyzing a raw CSV deals/trades export (v0.2.0+)
+Optional flags to tune the recommendation thresholds:
+
+```bash
+python -m trading_lab analyze-report report.htm \
+  --out report.md \
+  --min-trades 30 \
+  --min-profit-factor 1.5 \
+  --max-drawdown-pct 20
+```
+
+Run `python -m trading_lab analyze-report --help` for the full list.
+
+## CSV deals analysis
 
 The HTML summary report only gives you MT5's own aggregate figures. If you
 want metrics recomputed directly from the trade ledger, export your closed
@@ -67,49 +145,7 @@ still computed, but percentage drawdown is reported as unavailable rather
 than guessed. Run `python -m trading_lab analyze-deals --help` for the full
 list of flags.
 
-#### CSV exports with non-standard column names (v0.3.0+)
-
-If your broker, terminal language, or export method produces a deals CSV
-whose headers don't match any built-in English alias, point `analyze-deals`
-at a JSON column map instead of editing the CSV by hand:
-
-```bash
-python -m trading_lab analyze-deals deals.csv --out report.md \
-  --column-map column_map.json
-```
-
-`column_map.json` maps canonical field names to your CSV's actual header
-labels. Only these canonical names are recognized: `profit`, `type`,
-`entry`, `symbol`, `volume`, `commission`, `swap`, `comment`, `time`,
-`ticket`, `order`, `deal`.
-
-```json
-{
-  "profit": "Profit USD",
-  "type": "Operation",
-  "entry": "Entry",
-  "symbol": "Instrument",
-  "volume": "Lots",
-  "commission": "Commission",
-  "swap": "Swap",
-  "comment": "Comment"
-}
-```
-
-For a quick one-off override without a JSON file, use the matching
-`--*-column` flags, which take the exact CSV header label and override both
-the built-in aliases and `--column-map`:
-
-```bash
-python -m trading_lab analyze-deals deals.csv --out report.md \
-  --profit-column "Profit USD" --entry-column "Entry Type"
-```
-
-Available override flags: `--profit-column`, `--type-column`,
-`--entry-column`, `--symbol-column`, `--volume-column`,
-`--commission-column`, `--swap-column`, `--comment-column`.
-
-#### Inspecting CSV columns before analysis (v0.4.0+)
+## Inspecting CSV columns
 
 Before running a full analysis, you can inspect how `analyze-deals` would
 resolve your CSV's header — which raw column maps to which canonical field,
@@ -157,7 +193,7 @@ the full analysis each time. It exits `1` only for real read/parse errors:
 file not found, an empty CSV, or a missing/invalid/unrecognized
 `--column-map` file.
 
-#### Previewing CSV row classification (v0.5.0+)
+## Previewing CSV row classification
 
 `--list-columns` only inspects the header. To see how every **data row**
 would actually be interpreted — counted as a closed trade, skipped, or
@@ -166,13 +202,7 @@ rejected as malformed — before trusting the full analysis, use
 
 ```bash
 python -m trading_lab analyze-deals deals.csv --preview-rows
-```
-
-```bash
 python -m trading_lab analyze-deals deals.csv --preview-rows --max-preview-rows 100
-```
-
-```bash
 python -m trading_lab analyze-deals deals.csv --preview-rows --column-map column_map.json
 ```
 
@@ -230,40 +260,112 @@ In short:
 - `--preview-rows` — how would each **row** be counted or skipped?
 - `analyze-deals` (no flag) — compute the final metrics and write the report.
 
-## Installation
+See [docs/USAGE.md](docs/USAGE.md) for the recommended step-by-step workflow
+that ties these three together.
 
-Requires Python 3.9+. No external runtime dependencies.
+## Column mapping
 
-```bash
-pip install -e .
-```
-
-## Usage
-
-```bash
-python -m trading_lab analyze-report path/to/report.htm --out report.md
-```
-
-Optional flags to tune the recommendation thresholds:
+If your broker, terminal language, or export method produces a deals CSV
+whose headers don't match any built-in English alias, point `analyze-deals`
+at a JSON column map instead of editing the CSV by hand:
 
 ```bash
-python -m trading_lab analyze-report report.htm \
-  --out report.md \
-  --min-trades 30 \
-  --min-profit-factor 1.5 \
-  --max-drawdown-pct 20
+python -m trading_lab analyze-deals deals.csv --out report.md \
+  --column-map column_map.json
 ```
 
-Run `python -m trading_lab analyze-report --help` for the full list.
+`column_map.json` maps canonical field names to your CSV's actual header
+labels. Only these canonical names are recognized: `profit`, `type`,
+`entry`, `symbol`, `volume`, `commission`, `swap`, `comment`, `time`,
+`ticket`, `order`, `deal`.
 
-## What the recommendation checks
+```json
+{
+  "profit": "Profit USD",
+  "type": "Operation",
+  "entry": "Entry",
+  "symbol": "Instrument",
+  "volume": "Lots",
+  "commission": "Commission",
+  "swap": "Swap",
+  "comment": "Comment"
+}
+```
+
+For a quick one-off override without a JSON file, use the matching
+`--*-column` flags, which take the exact CSV header label and override both
+the built-in aliases and `--column-map`:
+
+```bash
+python -m trading_lab analyze-deals deals.csv --out report.md \
+  --profit-column "Profit USD" --entry-column "Entry Type"
+```
+
+Available override flags: `--profit-column`, `--type-column`,
+`--entry-column`, `--symbol-column`, `--volume-column`,
+`--commission-column`, `--swap-column`, `--comment-column`.
+
+Precedence (highest to lowest): direct `--*-column` flag > `--column-map`
+entry > built-in alias table.
+
+## Interpreting recommendations
+
+Both `analyze-report` and `analyze-deals` (without `--list-columns` /
+`--preview-rows`) end with the same verdict logic, applied to a handful of
+metrics:
+
+- `PASS_TO_DEMO` — every automated check passed: enough trades for a
+  meaningful sample, positive net profit, profit factor and drawdown within
+  the comfort thresholds.
+- `NEEDS_REVIEW` — at least one check is borderline (e.g. trade count below
+  the minimum, profit factor below the comfort threshold but still
+  positive, drawdown above the comfort threshold but below the hard
+  limit), or a core metric couldn't be read at all.
+- `REJECT` — at least one check failed outright (net loss, profit factor
+  below 1.0, or drawdown above the hard limit).
 
 The verdict is a deterministic, explainable set of rules over the metrics
 MT5 already reports (profit factor, relative drawdown, recovery factor,
 trade count, net profit). Every contributing reason is listed in the
 generated report, so you can see exactly why a strategy passed, needs a
 second look, or was rejected. There is no machine learning, no external
-scoring service, and no hidden logic.
+scoring service, and no hidden logic. The thresholds (`--min-trades`,
+`--min-profit-factor`, `--max-drawdown-pct`, ...) are CLI flags, not
+hard-coded constants — tune them to your own risk tolerance.
+
+A `PASS_TO_DEMO` verdict means "worth running on a demo account next," not
+"guaranteed profitable." Treat every recommendation as a local screening
+aid, not financial advice.
+
+## Troubleshooting
+
+- **"No usable profit column was found."** — Run `--list-columns` to see
+  which canonical fields were resolved. If `profit` is missing, add
+  `--profit-column "<your header>"` or a `--column-map` entry.
+- **"No closed trade/deal rows with a usable profit value were found."** —
+  Run `--preview-rows` to see why every row was skipped (often
+  `SKIP_NON_TRADE` or `SKIP_MISSING_PROFIT` on every row because `type`/
+  `entry` aren't mapped). Map the missing columns and re-run.
+- **A row's profit looks wrong / a trade is missing.** — Run
+  `--preview-rows` and look up that row's `Row` number; the `Decision` and
+  `Reason` columns explain exactly why it was counted, skipped, or rejected.
+- **`DealsParseError: could not parse profit value ... as a number.`** — A
+  row's profit column contains text that isn't a number (after stripping
+  thousands separators). Run `--preview-rows` to find the offending row
+  (`ERROR_MALFORMED_PROFIT`) and fix or remap that column.
+- **Percentage drawdown shows as unavailable.** — Pass
+  `--initial-balance <amount>` to `analyze-deals`; without it, only the
+  absolute drawdown amount can be computed.
+- **`--list-columns` and `--preview-rows` together return an error.** —
+  They're mutually exclusive; run one at a time.
+
+## Release status
+
+Current version: **v0.5.0** (unreleased — see [CHANGELOG.md](CHANGELOG.md)).
+
+No git tag or GitHub Release has been created for this version yet. See
+[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the manual steps required
+before a tag/release is created.
 
 ## Project layout
 
@@ -277,6 +379,8 @@ src/trading_lab/
   cli.py            # `analyze-report` / `analyze-deals` commands
 tests/
   fixtures/         # sample Strategy Tester report and CSV deals exports used in tests
+docs/
+  USAGE.md          # recommended step-by-step CSV/HTML workflows
 ```
 
 ## Known limitations
@@ -285,7 +389,7 @@ tests/
   (column names, delimiter, decimal/thousands formatting all differ).
   `analyze-deals` normalizes a set of common **English** MT5 CSV layouts; a
   CSV with an unrecognized profit column or an unfamiliar layout may need
-  manual column renaming in a later version.
+  manual column renaming or a column map.
 - No broker connection or live/demo trading is performed by either CLI
   command — both are local file-in / file-out analyzers only.
 - `--preview-rows` classifies rows according to the columns currently
@@ -293,14 +397,19 @@ tests/
   flags). It does not judge whether the underlying strategy is good, does
   not compute final performance metrics, does not connect to MT5, and does
   not place trades.
+- This tool is not financial advice and does not guarantee demo or live
+  trading results.
 
-## Out of scope for v0.1.0+
+## Out of scope
 
 - Live trading or order execution of any kind.
 - Broker account connections or password handling.
 - Continuous/background operation, schedulers, or a server component.
 - VPS or cloud deployment.
-- `metatrader5-mcp` integration (planned as an optional add-on later).
+- `metatrader5-mcp` integration (planned as an optional add-on later, never
+  required).
+- JSON output, plotting, or new analysis metrics beyond what's documented
+  above (kept out to keep the tool auditable and dependency-free).
 
 ## Development
 
@@ -308,3 +417,6 @@ tests/
 pip install -e ".[dev]"
 pytest
 ```
+
+See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the full set of checks
+run before any release.
