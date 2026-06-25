@@ -44,3 +44,21 @@ python -m trading_lab analyze-deals deals.csv --out deals_report.md
 ```bash
 python -m trading_lab analyze-report path/to/report.htm --out report.md
 ```
+
+## Machine-readable audit output
+
+`analyze-deals --list-columns` and `analyze-deals --preview-rows` also
+support `--format json`, for scripts and CI checks that want to assert on
+column mapping or row classification without parsing the plain-text tables:
+
+```bash
+python -m trading_lab analyze-deals deals.csv --list-columns --format json
+python -m trading_lab analyze-deals deals.csv --preview-rows --format json
+```
+
+This is audit-command JSON only: it covers header inspection and row
+classification, not the final performance metrics. `--format json` is not
+yet supported for a full `analyze-deals` run (no `--list-columns` /
+`--preview-rows`) or for `analyze-report`; using it there returns a clean
+CLI error rather than partial or misleading output. Plain text remains the
+default for both audit commands.

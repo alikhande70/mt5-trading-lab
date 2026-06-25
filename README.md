@@ -193,6 +193,15 @@ the full analysis each time. It exits `1` only for real read/parse errors:
 file not found, an empty CSV, or a missing/invalid/unrecognized
 `--column-map` file.
 
+For scripts and CI checks, the same inspection is available as JSON:
+
+```bash
+python -m trading_lab analyze-deals deals.csv --list-columns --format json
+```
+
+JSON output is intended for scripts and CI checks. Plain text remains the
+default for humans.
+
 ## Previewing CSV row classification
 
 `--list-columns` only inspects the header. To see how every **data row**
@@ -253,6 +262,15 @@ or for the same file/CSV/column-map errors as `--list-columns`; otherwise it
 exits `0`, including when zero rows are counted (skipped rows are not
 errors — review them and adjust your column mapping). `--preview-rows` and
 `--list-columns` are mutually exclusive.
+
+For scripts and CI checks, the same row preview is available as JSON:
+
+```bash
+python -m trading_lab analyze-deals deals.csv --preview-rows --format json
+```
+
+JSON output is intended for scripts and CI checks. Plain text remains the
+default for humans.
 
 In short:
 

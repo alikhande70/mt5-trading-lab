@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
@@ -303,6 +304,29 @@ def render_column_inspection(inspection: ColumnInspection) -> str:
     return "\n".join(lines)
 
 
+def render_column_inspection_json(inspection: ColumnInspection) -> str:
+    """JSON form of `render_column_inspection`, for scripts/CI. Same data,
+    machine-readable shape; see docs/USAGE.md for the field reference."""
+    payload = {
+        "command": "analyze-deals",
+        "mode": "list-columns",
+        "version": __version__,
+        "file": str(inspection.path),
+        "delimiter": inspection.delimiter,
+        "columns": [
+            {
+                "raw_header": column.raw_header,
+                "canonical_field": column.canonical_field,
+                "source": column.source,
+            }
+            for column in inspection.columns
+        ],
+        "warnings": list(inspection.warnings),
+        "suggested_next_action": inspection.suggested_next_action,
+    }
+    return json.dumps(payload, indent=2)
+
+
 def _preview_cell(value: Optional[Union[str, float]]) -> str:
     if value is None or value == "":
         return "-"
@@ -382,3 +406,45 @@ def render_row_preview(result: RowClassificationResult) -> str:
     lines.append(result.suggested_next_action)
 
     return "\n".join(lines)
+
+
+def render_row_preview_json(result: RowClassificationResult) -> str:
+    """JSON form of `render_row_preview`, for scripts/CI. Same data,
+    machine-readable shape; see docs/USAGE.md for the field reference."""
+    payload = {
+        "command": "analyze-deals",
+        "mode": "preview-rows",
+        "version": __version__,
+        "file": str(result.path),
+        "delimiter": result.delimiter,
+        "rows_inspected": len(result.rows),
+        "rows": [
+            {
+                "row_number": row.row_number,
+                "decision": row.decision,
+                "reason": row.reason,
+                "symbol": row.symbol,
+                "type_raw": row.type_raw,
+                "entry_raw": row.entry_raw,
+                "profit_raw": row.profit_raw,
+                "profit_value": row.profit_value,
+                "volume": row.volume,
+                "warning": row.warning,
+                "error": row.error,
+            }
+            for row in result.rows
+        ],
+        "summary": {
+            "total_data_rows": result.summary.total_data_rows,
+            "counted_rows": result.summary.counted_rows,
+            "skipped_non_trade_rows": result.summary.skipped_non_trade_rows,
+            "skipped_opening_rows": result.summary.skipped_opening_rows,
+            "skipped_missing_profit_rows": result.summary.skipped_missing_profit_rows,
+            "malformed_profit_rows": result.summary.malformed_profit_rows,
+            "incomplete_rows": result.summary.incomplete_rows,
+            "warnings": list(result.summary.warnings),
+            "errors": list(result.summary.errors),
+        },
+        "suggested_next_action": result.suggested_next_action,
+    }
+    return json.dumps(payload, indent=2)
