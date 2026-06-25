@@ -9,7 +9,11 @@ caller can pass ``column_overrides`` (canonical field name -> exact CSV
 header label) to ``parse_deals_csv``, optionally loaded from a JSON file via
 ``load_column_map``. ``inspect_deals_csv_columns`` resolves a CSV's header
 the same way without parsing any deal rows, for debugging a column layout
-before running the full analysis. Only the standard library (``csv``,
+before running the full analysis. ``classify_deals_csv_rows`` goes one level
+deeper and classifies every data row (counted as a closed trade, skipped for
+a specific reason, or flagged as a malformed-profit error) using the same
+per-row logic ``parse_deals_csv`` itself uses, so the two can never drift
+apart on what counts as a closed trade. Only the standard library (``csv``,
 ``json``) is used, consistent with the project's zero-runtime-dependency
 design.
 """
@@ -58,6 +62,54 @@ class ColumnInspection:
     delimiter: str
     columns: List[ColumnResolution]
     warnings: List[str] = field(default_factory=list)
+    suggested_next_action: str = ""
+
+
+# Row classification decisions. Every data row in a deals CSV ends up with
+# exactly one of these, from both `parse_deals_csv` and
+# `classify_deals_csv_rows` (they share the same per-row logic).
+COUNT_CLOSED_TRADE = "COUNT_CLOSED_TRADE"
+SKIP_NON_TRADE = "SKIP_NON_TRADE"
+SKIP_OPENING_ENTRY = "SKIP_OPENING_ENTRY"
+SKIP_MISSING_PROFIT = "SKIP_MISSING_PROFIT"
+SKIP_INCOMPLETE_ROW = "SKIP_INCOMPLETE_ROW"
+ERROR_MALFORMED_PROFIT = "ERROR_MALFORMED_PROFIT"
+
+
+@dataclass(frozen=True)
+class RowClassification:
+    row_number: int
+    decision: str
+    reason: str
+    profit_raw: Optional[str] = None
+    profit_value: Optional[float] = None
+    type_raw: Optional[str] = None
+    entry_raw: Optional[str] = None
+    symbol: Optional[str] = None
+    volume: Optional[float] = None
+    warning: Optional[str] = None
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class RowClassificationSummary:
+    total_data_rows: int
+    counted_rows: int
+    skipped_non_trade_rows: int
+    skipped_opening_rows: int
+    skipped_missing_profit_rows: int
+    malformed_profit_rows: int
+    incomplete_rows: int
+    warnings: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RowClassificationResult:
+    path: Path
+    delimiter: str
+    rows: List[RowClassification]
+    summary: RowClassificationSummary
     suggested_next_action: str = ""
 
 
@@ -264,6 +316,25 @@ def _find_suspicious_unmapped_headers(
     ]
 
 
+def _resolve_canonical_header(
+    header: List[str], column_overrides: Optional[Dict[str, str]]
+) -> Tuple[List[Optional[str]], bool, bool, List[str]]:
+    """Resolve a CSV header to canonical field names using column_overrides
+    (column-map and/or direct --*-column flags, already merged by the
+    caller) over the built-in alias table. Shared by `parse_deals_csv` and
+    `classify_deals_csv_rows` so both apply identical precedence.
+    """
+    override_by_slug = _slugify_overrides(column_overrides)
+    canonical_header = [
+        override_by_slug.get(_slugify(col)) or _CANONICAL_BY_ALIAS.get(_slugify(col))
+        for col in header
+    ]
+    has_type_column = "type" in canonical_header
+    has_entry_column = "entry" in canonical_header
+    suspicious_unmapped_headers = _find_suspicious_unmapped_headers(header, canonical_header)
+    return canonical_header, has_type_column, has_entry_column, suspicious_unmapped_headers
+
+
 _THOUSANDS_COMMA_RE = re.compile(r"^-?\d{1,3}(,\d{3})+(\.\d+)?$")
 _THOUSANDS_DOT_RE = re.compile(r"^-?\d{1,3}(\.\d{3})+(,\d+)?$")
 _COMMA_DECIMAL_RE = re.compile(r"^-?\d+,\d{1,2}$")
@@ -287,6 +358,125 @@ def _to_float(token: Optional[str]) -> Optional[float]:
         return None
 
 
+def _classify_row(
+    row_number: int,
+    raw_row: List[str],
+    header: List[str],
+    canonical_header: List[Optional[str]],
+    has_type_column: bool,
+    has_entry_column: bool,
+) -> Tuple[RowClassification, Dict[str, str]]:
+    """Classify a single data row: counted as a closed trade, skipped for a
+    specific reason, or flagged as a malformed-profit error. Returns the
+    classification plus the canonical-field record built along the way, so
+    `parse_deals_csv` can build a `Deal` from it without re-deriving the
+    record. Shared by `parse_deals_csv` and `classify_deals_csv_rows` so the
+    two can never drift apart on what counts as a closed trade.
+    """
+    if len(raw_row) < len(header):
+        return (
+            RowClassification(
+                row_number=row_number,
+                decision=SKIP_INCOMPLETE_ROW,
+                reason="Row has fewer columns than the header; skipped as incomplete.",
+            ),
+            {},
+        )
+
+    record: Dict[str, str] = {}
+    for col_name, value in zip(canonical_header, raw_row):
+        if col_name and col_name not in record:
+            record[col_name] = value.strip()
+
+    type_raw = record.get("type") or None
+    entry_raw = record.get("entry") or None
+    symbol = record.get("symbol") or None
+    volume = _to_float(record.get("volume"))
+
+    # Non-trade account operations (balance/deposit/withdrawal/credit/fee/...)
+    # are filtered out before profit parsing, since MT5 history exports often
+    # put a real dollar amount in the Profit column for these rows too.
+    if has_type_column and _is_non_trade_type(record.get("type", "")):
+        return (
+            RowClassification(
+                row_number=row_number,
+                decision=SKIP_NON_TRADE,
+                reason="Type is a non-trade account operation (balance/deposit/credit/fee/...).",
+                profit_raw=record.get("profit") or None,
+                type_raw=type_raw,
+                entry_raw=entry_raw,
+                symbol=symbol,
+                volume=volume,
+            ),
+            record,
+        )
+
+    if has_entry_column and _slugify(record.get("entry", "")) == "in":
+        return (
+            RowClassification(
+                row_number=row_number,
+                decision=SKIP_OPENING_ENTRY,
+                reason="Entry is 'in' (position-opening); never carries a realized profit.",
+                profit_raw=record.get("profit") or None,
+                type_raw=type_raw,
+                entry_raw=entry_raw,
+                symbol=symbol,
+                volume=volume,
+            ),
+            record,
+        )
+
+    profit_raw = record.get("profit", "")
+    if profit_raw == "":
+        return (
+            RowClassification(
+                row_number=row_number,
+                decision=SKIP_MISSING_PROFIT,
+                reason=(
+                    "No profit value on this row (e.g. a totals/footer line, or the "
+                    "profit column isn't mapped)."
+                ),
+                type_raw=type_raw,
+                entry_raw=entry_raw,
+                symbol=symbol,
+                volume=volume,
+            ),
+            record,
+        )
+
+    profit_value = _to_float(profit_raw)
+    if profit_value is None:
+        return (
+            RowClassification(
+                row_number=row_number,
+                decision=ERROR_MALFORMED_PROFIT,
+                reason="Profit value could not be parsed as a number.",
+                profit_raw=profit_raw,
+                type_raw=type_raw,
+                entry_raw=entry_raw,
+                symbol=symbol,
+                volume=volume,
+                error=f"Row {row_number}: could not parse profit value {profit_raw!r} as a number.",
+            ),
+            record,
+        )
+
+    return (
+        RowClassification(
+            row_number=row_number,
+            decision=COUNT_CLOSED_TRADE,
+            reason="Closed trade/deal counted.",
+            profit_raw=profit_raw,
+            profit_value=profit_value,
+            type_raw=type_raw,
+            entry_raw=entry_raw,
+            symbol=symbol,
+            volume=volume,
+        ),
+        record,
+    )
+
+
 def parse_deals_csv(path, column_overrides: Optional[Dict[str, str]] = None) -> ParsedDeals:
     path = Path(path)
     _delimiter, rows = _read_csv_rows(path)
@@ -295,12 +485,9 @@ def parse_deals_csv(path, column_overrides: Optional[Dict[str, str]] = None) -> 
     # column_overrides (from --column-map and/or direct --*-column flags)
     # take precedence over the built-in alias table, so a broker/locale with
     # non-standard headers can still be parsed without editing the CSV.
-    override_by_slug = _slugify_overrides(column_overrides)
-
-    canonical_header = [
-        override_by_slug.get(_slugify(col)) or _CANONICAL_BY_ALIAS.get(_slugify(col))
-        for col in header
-    ]
+    canonical_header, has_type_column, has_entry_column, suspicious_unmapped_headers = (
+        _resolve_canonical_header(header, column_overrides)
+    )
     if "profit" not in canonical_header:
         raise DealsParseError(
             "No usable profit column was found. Expected a column such as "
@@ -308,51 +495,32 @@ def parse_deals_csv(path, column_overrides: Optional[Dict[str, str]] = None) -> 
             "for a non-standard header."
         )
 
-    has_type_column = "type" in canonical_header
-    has_entry_column = "entry" in canonical_header
-
-    # Headers that look like a type/entry column by name but weren't resolved
-    # (no built-in alias and no override) — a strong signal that non-trade
-    # rows may slip through unfiltered.
-    suspicious_unmapped_headers = _find_suspicious_unmapped_headers(header, canonical_header)
-
     skipped_opening_deals = 0
     skipped_non_trade_rows = 0
     deals: List[Deal] = []
 
-    for row_index, raw_row in enumerate(rows[1:], start=2):
-        if len(raw_row) < len(header):
+    for offset, raw_row in enumerate(rows[1:]):
+        row_number = offset + 2
+        classification, record = _classify_row(
+            row_number, raw_row, header, canonical_header, has_type_column, has_entry_column
+        )
+
+        if classification.decision == SKIP_INCOMPLETE_ROW:
             continue  # tolerate stray short/blank trailing rows
-
-        record: Dict[str, str] = {}
-        for col_name, value in zip(canonical_header, raw_row):
-            if col_name and col_name not in record:
-                record[col_name] = value.strip()
-
-        # Non-trade account operations (balance/deposit/withdrawal/credit/fee/...)
-        # are filtered out before profit parsing, since MT5 history exports often
-        # put a real dollar amount in the Profit column for these rows too.
-        if has_type_column and _is_non_trade_type(record.get("type", "")):
+        if classification.decision == SKIP_NON_TRADE:
             skipped_non_trade_rows += 1
             continue
-
-        if has_entry_column and _slugify(record.get("entry", "")) == "in":
+        if classification.decision == SKIP_OPENING_ENTRY:
             skipped_opening_deals += 1
             continue  # position-opening deal; never carries a realized profit
-
-        profit_raw = record.get("profit", "")
-        if profit_raw == "":
+        if classification.decision == SKIP_MISSING_PROFIT:
             continue  # no profit on this row (e.g. a totals/footer line)
-
-        profit_value = _to_float(profit_raw)
-        if profit_value is None:
-            raise DealsParseError(
-                f"Row {row_index}: could not parse profit value {profit_raw!r} as a number."
-            )
+        if classification.decision == ERROR_MALFORMED_PROFIT:
+            raise DealsParseError(classification.error)
 
         deals.append(
             Deal(
-                profit=profit_value,
+                profit=classification.profit_value,
                 commission=_to_float(record.get("commission")),
                 swap=_to_float(record.get("swap")),
                 symbol=record.get("symbol") or None,
@@ -496,5 +664,101 @@ def inspect_deals_csv_columns(
         delimiter=delimiter,
         columns=columns,
         warnings=warnings,
+        suggested_next_action=suggested_next_action,
+    )
+
+
+def classify_deals_csv_rows(
+    path,
+    column_overrides: Optional[Dict[str, str]] = None,
+    max_rows: Optional[int] = None,
+) -> RowClassificationResult:
+    """Classify every data row in a deals CSV: counted as a closed trade,
+    skipped for a specific reason, or flagged as a malformed-profit error.
+    Used by `analyze-deals --preview-rows` to show exactly how each row would
+    be treated before trusting the full analysis. Reuses `_classify_row` —
+    the same function `parse_deals_csv` uses — so the two can never drift
+    apart on what counts as a closed trade.
+    """
+    path = Path(path)
+    delimiter, rows = _read_csv_rows(path)
+    header = rows[0]
+
+    canonical_header, has_type_column, has_entry_column, suspicious_unmapped_headers = (
+        _resolve_canonical_header(header, column_overrides)
+    )
+
+    data_rows = rows[1:]
+    if max_rows is not None:
+        data_rows = data_rows[:max_rows]
+
+    classifications: List[RowClassification] = []
+    for offset, raw_row in enumerate(data_rows):
+        row_number = offset + 2
+        classification, _record = _classify_row(
+            row_number, raw_row, header, canonical_header, has_type_column, has_entry_column
+        )
+        classifications.append(classification)
+
+    def _count(decision: str) -> int:
+        return sum(1 for c in classifications if c.decision == decision)
+
+    counted_rows = _count(COUNT_CLOSED_TRADE)
+    malformed_profit_rows = _count(ERROR_MALFORMED_PROFIT)
+
+    warnings: List[str] = []
+    if "profit" not in canonical_header:
+        warnings.append(
+            "No profit column was resolved; every row is classified as "
+            "SKIP_MISSING_PROFIT until profit is mapped via --column-map or --profit-column."
+        )
+    if column_overrides and not has_type_column and not has_entry_column:
+        warnings.append(
+            "Only the profit column is mapped; type/entry filtering is unavailable, "
+            "so non-trade history rows may be classified as closed trades unless the "
+            "CSV contains closed trades only."
+        )
+    if suspicious_unmapped_headers:
+        labels = ", ".join(repr(col) for col in suspicious_unmapped_headers)
+        warnings.append(
+            f"Column(s) {labels} look like a deal type/entry column but are not mapped "
+            "to 'type' or 'entry'; map them via --column-map or --type-column/"
+            "--entry-column, or non-trade history rows may be classified as closed trades."
+        )
+
+    errors = [c.error for c in classifications if c.error]
+
+    summary = RowClassificationSummary(
+        total_data_rows=len(classifications),
+        counted_rows=counted_rows,
+        skipped_non_trade_rows=_count(SKIP_NON_TRADE),
+        skipped_opening_rows=_count(SKIP_OPENING_ENTRY),
+        skipped_missing_profit_rows=_count(SKIP_MISSING_PROFIT),
+        malformed_profit_rows=malformed_profit_rows,
+        incomplete_rows=_count(SKIP_INCOMPLETE_ROW),
+        warnings=warnings,
+        errors=errors,
+    )
+
+    if malformed_profit_rows:
+        suggested_next_action = (
+            "Fix or remap the profit column for the malformed row(s) above, then re-run "
+            "analyze-deals."
+        )
+    elif counted_rows == 0:
+        suggested_next_action = (
+            "No closed trades were counted; review the skipped rows above and your "
+            "column mapping before running analyze-deals."
+        )
+    else:
+        suggested_next_action = (
+            "If the counted/skipped rows look correct, run analyze-deals without --preview-rows."
+        )
+
+    return RowClassificationResult(
+        path=path,
+        delimiter=delimiter,
+        rows=classifications,
+        summary=summary,
         suggested_next_action=suggested_next_action,
     )

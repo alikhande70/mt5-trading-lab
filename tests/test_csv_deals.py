@@ -3,7 +3,14 @@ from pathlib import Path
 import pytest
 
 from trading_lab.csv_deals import (
+    COUNT_CLOSED_TRADE,
+    ERROR_MALFORMED_PROFIT,
+    SKIP_INCOMPLETE_ROW,
+    SKIP_MISSING_PROFIT,
+    SKIP_NON_TRADE,
+    SKIP_OPENING_ENTRY,
     DealsParseError,
+    classify_deals_csv_rows,
     inspect_deals_csv_columns,
     load_column_map,
     parse_deals_csv,
@@ -416,3 +423,122 @@ def test_inspect_columns_rejects_unknown_canonical_key_in_direct_overrides():
             FIXTURES / "custom_header_deals.csv",
             direct_overrides={"foo": "Bar"},
         )
+
+
+def test_classify_rows_counted_rows_match_parse_deals_csv():
+    result = classify_deals_csv_rows(FIXTURES / "sample_deals.csv")
+    parsed = parse_deals_csv(FIXTURES / "sample_deals.csv")
+
+    assert result.summary.counted_rows == len(parsed.deals)
+    counted_profits = [r.profit_value for r in result.rows if r.decision == COUNT_CLOSED_TRADE]
+    assert counted_profits == [pytest.approx(d.profit) for d in parsed.deals]
+
+
+def test_classify_rows_marks_non_trade_rows(tmp_path):
+    csv_path = tmp_path / "with_balance.csv"
+    csv_path.write_text(
+        "Time,Type,Symbol,Profit,Entry\n"
+        "2024.01.01 00:00:00,balance,,10000.00,\n"
+        "2024.01.02 00:00:00,deposit,,500.00,\n"
+        "2024.01.03 09:00:00,buy,EURUSD,50.00,out\n",
+        encoding="utf-8",
+    )
+
+    result = classify_deals_csv_rows(csv_path)
+    decisions = [r.decision for r in result.rows]
+    assert decisions == [SKIP_NON_TRADE, SKIP_NON_TRADE, COUNT_CLOSED_TRADE]
+    assert result.summary.skipped_non_trade_rows == 2
+    assert result.summary.counted_rows == 1
+
+
+def test_classify_rows_marks_opening_entry_rows():
+    result = classify_deals_csv_rows(FIXTURES / "semicolon_deals.csv")
+    opening_rows = [r for r in result.rows if r.decision == SKIP_OPENING_ENTRY]
+    assert len(opening_rows) == 6
+    assert all(r.entry_raw == "in" for r in opening_rows)
+    assert result.summary.skipped_opening_rows == 6
+
+
+def test_classify_rows_marks_missing_profit_rows(tmp_path):
+    csv_path = tmp_path / "footer_row.csv"
+    csv_path.write_text(
+        "Time,Type,Symbol,Profit,Entry\n"
+        "2024.01.01 09:00:00,buy,EURUSD,50.00,out\n"
+        "2024.01.02 09:00:00,buy,EURUSD,,out\n",
+        encoding="utf-8",
+    )
+
+    result = classify_deals_csv_rows(csv_path)
+    assert [r.decision for r in result.rows] == [COUNT_CLOSED_TRADE, SKIP_MISSING_PROFIT]
+    assert result.summary.skipped_missing_profit_rows == 1
+
+
+def test_classify_rows_marks_malformed_profit_rows(tmp_path):
+    csv_path = tmp_path / "bad_profit.csv"
+    csv_path.write_text(
+        "Symbol,Profit\nEURUSD,50.00\nEURUSD,not-a-number\nEURUSD,-20.00\n",
+        encoding="utf-8",
+    )
+
+    result = classify_deals_csv_rows(csv_path)
+    assert [r.decision for r in result.rows] == [
+        COUNT_CLOSED_TRADE,
+        ERROR_MALFORMED_PROFIT,
+        COUNT_CLOSED_TRADE,
+    ]
+    assert result.summary.malformed_profit_rows == 1
+    assert result.summary.counted_rows == 2
+    malformed = next(r for r in result.rows if r.decision == ERROR_MALFORMED_PROFIT)
+    assert malformed.error == "Row 3: could not parse profit value 'not-a-number' as a number."
+    assert result.summary.errors == [malformed.error]
+
+
+def test_classify_rows_marks_incomplete_rows(tmp_path):
+    csv_path = tmp_path / "short_row.csv"
+    csv_path.write_text("Symbol,Profit\nEURUSD,50.00\nEURUSD\n", encoding="utf-8")
+
+    result = classify_deals_csv_rows(csv_path)
+    assert [r.decision for r in result.rows] == [COUNT_CLOSED_TRADE, SKIP_INCOMPLETE_ROW]
+    assert result.summary.incomplete_rows == 1
+
+
+def test_classify_rows_respects_max_rows():
+    result = classify_deals_csv_rows(FIXTURES / "sample_deals.csv", max_rows=5)
+    assert len(result.rows) == 5
+    assert result.summary.total_data_rows == 5
+
+
+def test_classify_rows_works_with_column_map():
+    column_map = load_column_map(FIXTURES / "custom_header_column_map.json")
+    result = classify_deals_csv_rows(FIXTURES / "custom_header_deals.csv", column_overrides=column_map)
+
+    assert result.summary.counted_rows == 2
+    assert result.summary.skipped_non_trade_rows == 1
+    assert result.summary.skipped_opening_rows == 2
+
+
+def test_classify_rows_works_with_direct_overrides():
+    result = classify_deals_csv_rows(
+        FIXTURES / "custom_header_deals.csv",
+        column_overrides={"profit": "Result", "type": "Operation", "entry": "Entry Type"},
+    )
+
+    assert result.summary.counted_rows == 2
+    assert result.summary.skipped_non_trade_rows == 1
+    assert result.summary.skipped_opening_rows == 2
+
+
+def test_classify_rows_rejects_unknown_canonical_key_in_overrides():
+    with pytest.raises(DealsParseError):
+        classify_deals_csv_rows(
+            FIXTURES / "custom_header_deals.csv",
+            column_overrides={"foo": "Bar"},
+        )
+
+
+def test_classify_rows_rejects_empty_csv(tmp_path):
+    csv_path = tmp_path / "empty.csv"
+    csv_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(DealsParseError):
+        classify_deals_csv_rows(csv_path)
