@@ -109,6 +109,54 @@ Available override flags: `--profit-column`, `--type-column`,
 `--entry-column`, `--symbol-column`, `--volume-column`,
 `--commission-column`, `--swap-column`, `--comment-column`.
 
+#### Inspecting CSV columns before analysis (v0.4.0+)
+
+Before running a full analysis, you can inspect how `analyze-deals` would
+resolve your CSV's header — which raw column maps to which canonical field,
+and whether that came from a built-in alias, `--column-map`, or a direct
+`--*-column` flag. This only reads the header; it never parses deal rows,
+computes metrics, or writes a report file.
+
+```bash
+python -m trading_lab analyze-deals deals.csv --list-columns
+python -m trading_lab analyze-deals deals.csv --list-columns --column-map column_map.json
+python -m trading_lab analyze-deals deals.csv --list-columns --profit-column "Result"
+```
+
+Example output:
+
+```
+CSV column inspection
+File: deals.csv
+Delimiter: ,
+
+Raw header    Canonical field    Source
+
+Close Time    time               column-map
+Instrument    symbol             column-map
+Operation     type               direct override
+Entry Type    entry              direct override
+Result        profit             direct override
+Fee           commission         column-map
+Overnight     swap               column-map
+Note          comment            column-map
+
+Warnings:
+
+- No issue detected.
+
+Suggested next action:
+Run analyze-deals without --list-columns to generate the report.
+```
+
+`--list-columns` exits `0` whenever the CSV can be read, even if some
+columns are left unmapped — any concerns (an unmapped profit column, or a
+header that looks like a type/entry column but isn't mapped) are surfaced as
+warnings, not errors, so you can iterate on a column map without re-running
+the full analysis each time. It exits `1` only for real read/parse errors:
+file not found, an empty CSV, or a missing/invalid/unrecognized
+`--column-map` file.
+
 ## Installation
 
 Requires Python 3.9+. No external runtime dependencies.
