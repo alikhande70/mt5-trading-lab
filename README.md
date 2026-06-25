@@ -157,6 +157,79 @@ the full analysis each time. It exits `1` only for real read/parse errors:
 file not found, an empty CSV, or a missing/invalid/unrecognized
 `--column-map` file.
 
+#### Previewing CSV row classification (v0.5.0+)
+
+`--list-columns` only inspects the header. To see how every **data row**
+would actually be interpreted — counted as a closed trade, skipped, or
+rejected as malformed — before trusting the full analysis, use
+`--preview-rows`:
+
+```bash
+python -m trading_lab analyze-deals deals.csv --preview-rows
+```
+
+```bash
+python -m trading_lab analyze-deals deals.csv --preview-rows --max-preview-rows 100
+```
+
+```bash
+python -m trading_lab analyze-deals deals.csv --preview-rows --column-map column_map.json
+```
+
+`--preview-rows` classifies each data row using exactly the same per-row
+logic as the full analysis (`parse_deals_csv` and `--preview-rows` share one
+row-classification function, so they cannot drift apart) and prints a table
+of the decisions plus a summary:
+
+```
+CSV row preview
+File: deals.csv
+Delimiter: ,
+Rows inspected: 50
+
+Row    Decision              Reason                        Symbol    Type    Entry    Profit raw    Profit
+
+2      COUNT_CLOSED_TRADE    Closed trade/deal counted.    EURUSD    buy     -        50.00         50.00
+3      SKIP_NON_TRADE        Type is a non-trade account operation (balance/deposit/credit/fee/...).    -    balance    -    10000.00    -
+
+Summary:
+
+- Total data rows inspected: 50
+- Counted closed trades: 48
+- Skipped non-trade rows: 1
+- Skipped opening rows: 0
+- Skipped missing-profit rows: 1
+- Malformed profit rows: 0
+- Incomplete rows: 0
+
+Warnings:
+
+- No issue detected.
+
+Errors:
+
+- None.
+
+Suggested next action:
+If the counted/skipped rows look correct, run analyze-deals without --preview-rows.
+```
+
+Each row gets exactly one decision: `COUNT_CLOSED_TRADE`, `SKIP_NON_TRADE`,
+`SKIP_OPENING_ENTRY`, `SKIP_MISSING_PROFIT`, `SKIP_INCOMPLETE_ROW`, or
+`ERROR_MALFORMED_PROFIT`. `--preview-rows` never computes strategy metrics
+and never writes a Markdown report, even if `--out` is also passed. It
+exits `1` if any classified row has a malformed (unparseable) profit value,
+or for the same file/CSV/column-map errors as `--list-columns`; otherwise it
+exits `0`, including when zero rows are counted (skipped rows are not
+errors — review them and adjust your column mapping). `--preview-rows` and
+`--list-columns` are mutually exclusive.
+
+In short:
+
+- `--list-columns` — what does the **header** resolve to?
+- `--preview-rows` — how would each **row** be counted or skipped?
+- `analyze-deals` (no flag) — compute the final metrics and write the report.
+
 ## Installation
 
 Requires Python 3.9+. No external runtime dependencies.
@@ -215,6 +288,11 @@ tests/
   manual column renaming in a later version.
 - No broker connection or live/demo trading is performed by either CLI
   command — both are local file-in / file-out analyzers only.
+- `--preview-rows` classifies rows according to the columns currently
+  mapped (built-in aliases, `--column-map`, and/or direct `--*-column`
+  flags). It does not judge whether the underlying strategy is good, does
+  not compute final performance metrics, does not connect to MT5, and does
+  not place trades.
 
 ## Out of scope for v0.1.0+
 

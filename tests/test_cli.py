@@ -482,3 +482,123 @@ def test_analyze_deals_list_columns_missing_file_returns_error(tmp_path):
     )
 
     assert exit_code == 1
+
+
+def test_analyze_deals_preview_rows_prints_decisions_and_summary(capsys):
+    exit_code = main(
+        ["analyze-deals", str(FIXTURES / "sample_deals.csv"), "--preview-rows", "--max-preview-rows", "5"]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "CSV row preview" in captured.out
+    assert "Rows inspected: 5" in captured.out
+    assert "COUNT_CLOSED_TRADE" in captured.out
+    assert "Summary:" in captured.out
+    assert "Total data rows inspected: 5" in captured.out
+    assert "Recommendation:" not in captured.out
+
+
+def test_analyze_deals_preview_rows_does_not_create_report_file(tmp_path):
+    out_path = tmp_path / "deals_report.md"
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "sample_deals.csv"),
+            "--out",
+            str(out_path),
+            "--preview-rows",
+        ]
+    )
+
+    assert exit_code == 0
+    assert not out_path.exists()
+
+
+def test_analyze_deals_preview_rows_with_column_map(capsys):
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--preview-rows",
+            "--column-map",
+            str(FIXTURES / "custom_header_column_map.json"),
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "SKIP_NON_TRADE" in captured.out
+    assert "SKIP_OPENING_ENTRY" in captured.out
+    assert "Counted closed trades: 2" in captured.out
+
+
+def test_analyze_deals_preview_rows_with_direct_overrides(capsys):
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--preview-rows",
+            "--profit-column",
+            "Result",
+            "--type-column",
+            "Operation",
+            "--entry-column",
+            "Entry Type",
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Counted closed trades: 2" in captured.out
+
+
+def test_analyze_deals_preview_rows_and_list_columns_mutually_exclusive():
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "sample_deals.csv"),
+            "--preview-rows",
+            "--list-columns",
+        ]
+    )
+
+    assert exit_code == 1
+
+
+def test_analyze_deals_preview_rows_rejects_non_positive_max_rows():
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "sample_deals.csv"),
+            "--preview-rows",
+            "--max-preview-rows",
+            "0",
+        ]
+    )
+
+    assert exit_code == 1
+
+
+def test_analyze_deals_preview_rows_exit_code_1_on_malformed_profit(tmp_path):
+    csv_path = tmp_path / "bad_profit.csv"
+    csv_path.write_text(
+        "Symbol,Profit\nEURUSD,50.00\nEURUSD,not-a-number\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(["analyze-deals", str(csv_path), "--preview-rows"])
+
+    assert exit_code == 1
+
+
+def test_analyze_deals_preview_rows_missing_file_returns_error(tmp_path):
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(tmp_path / "does_not_exist.csv"),
+            "--preview-rows",
+        ]
+    )
+
+    assert exit_code == 1

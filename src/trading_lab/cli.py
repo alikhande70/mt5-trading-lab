@@ -8,11 +8,17 @@ from pathlib import Path
 from typing import Dict, Optional, Sequence
 
 from . import __version__
-from .csv_deals import DealsParseError, inspect_deals_csv_columns, load_column_map, parse_deals_csv
+from .csv_deals import (
+    DealsParseError,
+    classify_deals_csv_rows,
+    inspect_deals_csv_columns,
+    load_column_map,
+    parse_deals_csv,
+)
 from .html_report import ReportParseError, parse_html_report
 from .metrics import compute_deals_metrics, compute_metrics
 from .recommend import Thresholds, evaluate, evaluate_core
-from .report import render_column_inspection, render_deals_markdown, render_markdown
+from .report import render_column_inspection, render_deals_markdown, render_markdown, render_row_preview
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -163,6 +169,23 @@ def _build_parser() -> argparse.ArgumentParser:
             "--*-column flags."
         ),
     )
+    analyze_deals.add_argument(
+        "--preview-rows",
+        action="store_true",
+        help=(
+            "Classify each data row (counted as a closed trade, skipped, or "
+            "malformed) and print the decisions plus a summary, then exit. Does "
+            "not compute metrics or write a report; useful for auditing how a CSV "
+            "would be interpreted before trusting the full analysis. Mutually "
+            "exclusive with --list-columns."
+        ),
+    )
+    analyze_deals.add_argument(
+        "--max-preview-rows",
+        type=int,
+        default=50,
+        help="Maximum number of data rows to classify/display with --preview-rows (default: 50).",
+    )
     analyze_deals.set_defaults(handler=_handle_analyze_deals)
 
     return parser
@@ -197,6 +220,14 @@ def _handle_analyze_report(args: argparse.Namespace) -> int:
 
 
 def _handle_analyze_deals(args: argparse.Namespace) -> int:
+    if args.list_columns and args.preview_rows:
+        print("error: --list-columns and --preview-rows are mutually exclusive.", file=sys.stderr)
+        return 1
+
+    if args.max_preview_rows <= 0:
+        print("error: --max-preview-rows must be a positive integer.", file=sys.stderr)
+        return 1
+
     if not args.deals_path.exists():
         print(f"error: deals CSV file not found: {args.deals_path}", file=sys.stderr)
         return 1
@@ -239,6 +270,19 @@ def _handle_analyze_deals(args: argparse.Namespace) -> int:
         return 0
 
     column_overrides = {**column_map_overrides, **direct_overrides}
+
+    if args.preview_rows:
+        try:
+            result = classify_deals_csv_rows(
+                args.deals_path,
+                column_overrides=column_overrides or None,
+                max_rows=args.max_preview_rows,
+            )
+        except DealsParseError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(render_row_preview(result))
+        return 1 if result.summary.malformed_profit_rows else 0
 
     try:
         parsed = parse_deals_csv(args.deals_path, column_overrides=column_overrides or None)

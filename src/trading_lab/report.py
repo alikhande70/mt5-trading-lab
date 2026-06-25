@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 from . import __version__
-from .csv_deals import ColumnInspection
+from .csv_deals import ColumnInspection, RowClassificationResult
 from .metrics import DealsMetrics, Metrics
 from .recommend import PASS_TO_DEMO, REJECT, Recommendation, Thresholds
 
@@ -299,5 +299,86 @@ def render_column_inspection(inspection: ColumnInspection) -> str:
 
     lines.append("Suggested next action:")
     lines.append(inspection.suggested_next_action)
+
+    return "\n".join(lines)
+
+
+def _preview_cell(value: Optional[Union[str, float]]) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    return str(value)
+
+
+def render_row_preview(result: RowClassificationResult) -> str:
+    lines: List[str] = []
+
+    lines.append("CSV row preview")
+    lines.append(f"File: {result.path}")
+    lines.append(f"Delimiter: {result.delimiter}")
+    lines.append(f"Rows inspected: {len(result.rows)}")
+    lines.append("")
+
+    column_labels = ["Row", "Decision", "Reason", "Symbol", "Type", "Entry", "Profit raw", "Profit"]
+    table_rows = [
+        [
+            str(row.row_number),
+            row.decision,
+            row.reason,
+            _preview_cell(row.symbol),
+            _preview_cell(row.type_raw),
+            _preview_cell(row.entry_raw),
+            _preview_cell(row.profit_raw),
+            _preview_cell(row.profit_value),
+        ]
+        for row in result.rows
+    ]
+
+    widths = [
+        max([len(column_labels[i])] + [len(table_row[i]) for table_row in table_rows]) + 4
+        for i in range(len(column_labels))
+    ]
+
+    lines.append("".join(f"{label:<{widths[i]}}" for i, label in enumerate(column_labels)).rstrip())
+    lines.append("")
+    for table_row in table_rows:
+        lines.append(
+            "".join(f"{cell:<{widths[i]}}" for i, cell in enumerate(table_row)).rstrip()
+        )
+    lines.append("")
+
+    summary = result.summary
+    lines.append("Summary:")
+    lines.append("")
+    lines.append(f"- Total data rows inspected: {summary.total_data_rows}")
+    lines.append(f"- Counted closed trades: {summary.counted_rows}")
+    lines.append(f"- Skipped non-trade rows: {summary.skipped_non_trade_rows}")
+    lines.append(f"- Skipped opening rows: {summary.skipped_opening_rows}")
+    lines.append(f"- Skipped missing-profit rows: {summary.skipped_missing_profit_rows}")
+    lines.append(f"- Malformed profit rows: {summary.malformed_profit_rows}")
+    lines.append(f"- Incomplete rows: {summary.incomplete_rows}")
+    lines.append("")
+
+    lines.append("Warnings:")
+    lines.append("")
+    if summary.warnings:
+        for warning in summary.warnings:
+            lines.append(f"- {warning}")
+    else:
+        lines.append("- No issue detected.")
+    lines.append("")
+
+    lines.append("Errors:")
+    lines.append("")
+    if summary.errors:
+        for error in summary.errors:
+            lines.append(f"- {error}")
+    else:
+        lines.append("- None.")
+    lines.append("")
+
+    lines.append("Suggested next action:")
+    lines.append(result.suggested_next_action)
 
     return "\n".join(lines)
