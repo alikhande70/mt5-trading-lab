@@ -168,6 +168,22 @@ def _is_non_trade_type(type_value: str) -> bool:
     return bool(set(slug.split("_")) & _NON_TRADE_TYPE_TOKENS)
 
 
+# Header slugs that strongly suggest a deal-type/entry-direction column
+# (e.g. a broker's "Operation" or "Entry Type" header) even though they
+# don't match any built-in alias or column override. Used to warn when such
+# a header is left unmapped, since without it non-trade history rows
+# (balance/deposit/credit/fee/...) can't be filtered out.
+_SUSPICIOUS_TYPE_ENTRY_SLUGS = {
+    "type",
+    "entry",
+    "operation",
+    "entry_type",
+    "direction",
+    "deal_type",
+    "order_type",
+}
+
+
 def _read_text(path: Path) -> str:
     raw = path.read_bytes()
     if raw.startswith(b"\xef\xbb\xbf"):
@@ -252,6 +268,16 @@ def parse_deals_csv(path, column_overrides: Optional[Dict[str, str]] = None) -> 
 
     has_type_column = "type" in canonical_header
     has_entry_column = "entry" in canonical_header
+
+    # Headers that look like a type/entry column by name but weren't resolved
+    # (no built-in alias and no override) — a strong signal that non-trade
+    # rows may slip through unfiltered.
+    suspicious_unmapped_headers = [
+        col
+        for col, canonical in zip(header, canonical_header)
+        if canonical is None and _slugify(col) in _SUSPICIOUS_TYPE_ENTRY_SLUGS
+    ]
+
     skipped_opening_deals = 0
     skipped_non_trade_rows = 0
     deals: List[Deal] = []
@@ -309,6 +335,19 @@ def parse_deals_csv(path, column_overrides: Optional[Dict[str, str]] = None) -> 
         warnings.append(
             f"Skipped {skipped_opening_deals} position-opening ('in') deal row(s); "
             "only closed/closing deals are counted in the metrics below."
+        )
+    if column_overrides and not has_type_column and not has_entry_column:
+        warnings.append(
+            "Only the profit column is mapped; type/entry filtering is unavailable, "
+            "so non-trade history rows may be counted unless the CSV contains closed "
+            "trades only."
+        )
+    if suspicious_unmapped_headers:
+        labels = ", ".join(repr(col) for col in suspicious_unmapped_headers)
+        warnings.append(
+            f"Column(s) {labels} look like a deal type/entry column but are not mapped "
+            "to 'type' or 'entry'; map them via --column-map or --type-column/"
+            "--entry-column, or non-trade history rows may be counted as closed trades."
         )
     if "commission" not in canonical_header:
         warnings.append("No commission column found; commission is not reflected in net profit.")

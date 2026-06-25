@@ -211,6 +211,24 @@ def test_analyze_deals_custom_thresholds_change_outcome(tmp_path):
     assert "NEEDS_REVIEW" in content
 
 
+def test_analyze_deals_profit_only_override_warns_in_report(tmp_path):
+    out_path = tmp_path / "deals_report.md"
+    exit_code = main(
+        [
+            "analyze-deals",
+            str(FIXTURES / "custom_header_deals.csv"),
+            "--out",
+            str(out_path),
+            "--profit-column",
+            "Result",
+        ]
+    )
+
+    assert exit_code == 0
+    content = out_path.read_text(encoding="utf-8")
+    assert "filtering is unavailable" in content
+
+
 def test_analyze_deals_with_column_map_json(tmp_path):
     out_path = tmp_path / "deals_report.md"
     exit_code = main(
