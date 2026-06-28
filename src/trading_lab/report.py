@@ -267,6 +267,69 @@ def render_deals_markdown(
     return "\n".join(lines) + "\n"
 
 
+def render_deals_analysis_json(
+    source_path,
+    metrics: DealsMetrics,
+    recommendation: Recommendation,
+    thresholds: Thresholds,
+    warnings: Optional[List[str]] = None,
+) -> str:
+    """JSON form of `render_deals_markdown`, for scripts/CI/local agents.
+
+    Serializes the same analysis (metrics, recommendation, thresholds,
+    warnings, and suggested next action) that the Markdown report renders --
+    it represents the same computation, not a separate one. See docs/USAGE.md
+    for the field reference.
+    """
+    warnings = warnings or []
+    payload = {
+        "command": "analyze-deals",
+        "mode": "analysis",
+        "version": __version__,
+        "file": str(source_path),
+        "metrics": {
+            "total_trades": metrics.total_trades,
+            "win_count": metrics.win_count,
+            "loss_count": metrics.loss_count,
+            "net_profit": metrics.net_profit,
+            "gross_profit": metrics.gross_profit,
+            "gross_loss": metrics.gross_loss,
+            "profit_factor": metrics.profit_factor,
+            "total_commission": metrics.total_commission,
+            "total_swap": metrics.total_swap,
+            "win_rate_pct": metrics.win_rate_pct,
+            "loss_rate_pct": metrics.loss_rate_pct,
+            "average_win": metrics.average_win,
+            "average_loss": metrics.average_loss,
+            "largest_win": metrics.largest_win,
+            "largest_loss": metrics.largest_loss,
+            "payoff_ratio": metrics.payoff_ratio,
+            "max_consecutive_wins": metrics.max_consecutive_wins,
+            "max_consecutive_losses": metrics.max_consecutive_losses,
+            "equity_curve": list(metrics.equity_curve),
+            "max_drawdown_amount": metrics.max_drawdown_amount,
+            "max_drawdown_pct": metrics.max_drawdown_pct,
+            "initial_balance": metrics.initial_balance,
+        },
+        "recommendation": {
+            "verdict": recommendation.verdict,
+            "reasons": list(recommendation.reasons),
+            "passed": list(recommendation.passed),
+        },
+        "thresholds": {
+            "min_trades": thresholds.min_trades,
+            "min_profit_factor": thresholds.min_profit_factor,
+            "reject_profit_factor": thresholds.reject_profit_factor,
+            "max_drawdown_pct": thresholds.max_drawdown_pct,
+            "reject_drawdown_pct": thresholds.reject_drawdown_pct,
+            "min_recovery_factor": thresholds.min_recovery_factor,
+        },
+        "warnings": list(warnings),
+        "suggested_next_action": _next_action(recommendation.verdict),
+    }
+    return json.dumps(payload, indent=2)
+
+
 def render_column_inspection(inspection: ColumnInspection) -> str:
     lines: List[str] = []
 

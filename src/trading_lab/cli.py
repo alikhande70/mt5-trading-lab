@@ -21,6 +21,7 @@ from .recommend import Thresholds, evaluate, evaluate_core
 from .report import (
     render_column_inspection,
     render_column_inspection_json,
+    render_deals_analysis_json,
     render_deals_markdown,
     render_markdown,
     render_row_preview,
@@ -88,8 +89,12 @@ def _build_parser() -> argparse.ArgumentParser:
     analyze_deals.add_argument(
         "--out",
         type=Path,
-        default=Path("deals_report.md"),
-        help="Where to write the Markdown report (default: deals_report.md).",
+        default=None,
+        help=(
+            "Where to write the Markdown report (default: deals_report.md). "
+            "Markdown only; not supported with --format json (redirect stdout "
+            "to a .json file instead)."
+        ),
     )
     analyze_deals.add_argument(
         "--initial-balance",
@@ -198,9 +203,10 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["text", "json"],
         default="text",
         help=(
-            "Output format for --list-columns / --preview-rows (default: text). "
-            "JSON is intended for scripts and CI checks; not yet supported for the "
-            "full analysis report."
+            "Output format (default: text). With json, --list-columns / "
+            "--preview-rows / the full analysis all print JSON to stdout for "
+            "scripts and CI checks. Full-analysis json prints to stdout only "
+            "(redirect to a .json file); it is not written via --out."
         ),
     )
     analyze_deals.set_defaults(handler=_handle_analyze_deals)
@@ -245,9 +251,14 @@ def _handle_analyze_deals(args: argparse.Namespace) -> int:
         print("error: --max-preview-rows must be a positive integer.", file=sys.stderr)
         return 1
 
-    if args.format == "json" and not (args.list_columns or args.preview_rows):
+    # Full-analysis JSON is stdout-only; --out is a Markdown-report path, so
+    # don't silently write JSON into it. Audit modes (--list-columns /
+    # --preview-rows) never write files, so --out is irrelevant there.
+    full_analysis = not (args.list_columns or args.preview_rows)
+    if args.format == "json" and full_analysis and args.out is not None:
         print(
-            "error: --format json is currently supported only with --list-columns or --preview-rows.",
+            "error: --out is not supported with --format json for full analyze-deals "
+            "output; redirect stdout to a .json file instead.",
             file=sys.stderr,
         )
         return 1
@@ -342,13 +353,18 @@ def _handle_analyze_deals(args: argparse.Namespace) -> int:
             "(only the absolute drawdown amount was computed)."
         )
 
+    if args.format == "json":
+        print(render_deals_analysis_json(args.deals_path, metrics, recommendation, thresholds, warnings))
+        return 0
+
     markdown = render_deals_markdown(args.deals_path, metrics, recommendation, thresholds, warnings)
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(markdown, encoding="utf-8")
+    out_path = args.out if args.out is not None else Path("deals_report.md")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(markdown, encoding="utf-8")
 
     print(f"Recommendation: {recommendation.verdict}")
-    print(f"Report written to: {args.out}")
+    print(f"Report written to: {out_path}")
     return 0
 
 

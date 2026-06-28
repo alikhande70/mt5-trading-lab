@@ -45,20 +45,36 @@ python -m trading_lab analyze-deals deals.csv --out deals_report.md
 python -m trading_lab analyze-report path/to/report.htm --out report.md
 ```
 
-## Machine-readable audit output
+## Machine-readable JSON output
 
-`analyze-deals --list-columns` and `analyze-deals --preview-rows` also
-support `--format json`, for scripts and CI checks that want to assert on
-column mapping or row classification without parsing the plain-text tables:
+`analyze-deals` can emit JSON instead of plain text via `--format json`, for
+scripts, CI checks, and local agents. There are two kinds of JSON, both
+local file-in / stdout-out and both stdlib-only:
+
+**Audit JSON** — `--list-columns` and `--preview-rows`. Assert on column
+mapping or row classification without parsing the plain-text tables:
 
 ```bash
 python -m trading_lab analyze-deals deals.csv --list-columns --format json
 python -m trading_lab analyze-deals deals.csv --preview-rows --format json
 ```
 
-This is audit-command JSON only: it covers header inspection and row
-classification, not the final performance metrics. `--format json` is not
-yet supported for a full `analyze-deals` run (no `--list-columns` /
-`--preview-rows`) or for `analyze-report`; using it there returns a clean
-CLI error rather than partial or misleading output. Plain text remains the
-default for both audit commands.
+**Full analysis JSON** — `analyze-deals` with no audit flag. Serializes the
+same metrics, recommendation, thresholds, and warnings as the Markdown
+report (the same computation, not a separate one):
+
+```bash
+python -m trading_lab analyze-deals deals.csv --format json
+python -m trading_lab analyze-deals deals.csv --format json > deals_report.json
+```
+
+Full-analysis JSON prints to **stdout only**. `--out` is the Markdown-report
+path and cannot be combined with `--format json` for a full run — doing so
+returns a clean CLI error rather than writing JSON into a Markdown-oriented
+file. Redirect stdout to a `.json` file instead.
+
+JSON output for `analyze-report` (the HTML Strategy Tester report command)
+is **not implemented yet**. In all JSON modes, the JSON payload is the only
+thing on stdout on success; errors still go to stderr, and the exit code is
+unchanged from the plain-text behavior. Plain text remains the default for
+every command.
