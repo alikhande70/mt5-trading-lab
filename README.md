@@ -145,6 +145,26 @@ still computed, but percentage drawdown is reported as unavailable rather
 than guessed. Run `python -m trading_lab analyze-deals --help` for the full
 list of flags.
 
+For scripts, CI checks, and local agents, the same full analysis is also
+available as JSON. It serializes the same metrics, recommendation,
+thresholds, and warnings that the Markdown report contains:
+
+```bash
+python -m trading_lab analyze-deals deals.csv --format json
+```
+
+Full-analysis JSON prints to **stdout** (not to a file), so redirect it to
+save it:
+
+```bash
+python -m trading_lab analyze-deals deals.csv --format json > deals_report.json
+```
+
+`--out` is for the Markdown report only and cannot be combined with
+`--format json` for the full analysis (the CLI returns a clear error rather
+than writing JSON into a Markdown-oriented path). Plain text remains the
+default, so `--out` and the default `deals_report.md` behavior are unchanged.
+
 ## Inspecting CSV columns
 
 Before running a full analysis, you can inspect how `analyze-deals` would
