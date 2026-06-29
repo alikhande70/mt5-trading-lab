@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 from . import __version__
+from .compare import ComparisonResult
 from .csv_deals import ColumnInspection, RowClassificationResult
 from .decision import DecisionReport
 from .diagnostics import Diagnostic
@@ -351,6 +352,107 @@ def render_analysis_json(*args, **kwargs) -> str:
     """Serialize :func:`build_analysis_payload` to a JSON string."""
     payload = build_analysis_payload(*args, **kwargs)
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+
+
+def render_comparison_markdown(
+    comparison: ComparisonResult,
+    generated_at: Optional[datetime] = None,
+) -> str:
+    generated_at = generated_at or datetime.now()
+    lines: List[str] = []
+
+    lines.append("# MT5 Backtest Comparison")
+    lines.append("")
+    lines.append(
+        f"Generated: {generated_at.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(local time, trading-lab v{__version__})"
+    )
+    lines.append("")
+
+    lines.append("## Recommendation")
+    lines.append("")
+    lines.append(comparison.recommendation)
+    for reason in comparison.reasons:
+        lines.append(f"- {reason}")
+    lines.append("")
+
+    lines.append("## Ranking (risk-adjusted, best first)")
+    lines.append("")
+    lines.append("| Rank | Run | Score | Verdict | Net profit | Profit factor | Drawdown | Trades | Flags |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for index, run in enumerate(comparison.runs, start=1):
+        dd = _fmt(run.drawdown_pct, "%") if run.drawdown_pct is not None else "n/a"
+        flags = ", ".join(run.flags) if run.flags else "-"
+        lines.append(
+            f"| {index} | `{run.name}` | {run.score.total:.1f} | {run.decision} | "
+            f"{_fmt(run.net_profit)} | {_fmt(run.profit_factor)} | {dd} | "
+            f"{_fmt(run.trade_count)} | {flags} |"
+        )
+    lines.append("")
+
+    lines.append("## Score breakdown")
+    lines.append("")
+    lines.append("| Run | Stability | Profit quality | Drawdown control | Sample quality | Completeness |")
+    lines.append("| --- | --- | --- | --- | --- | --- |")
+    for run in comparison.runs:
+        c = run.score.components
+        lines.append(
+            f"| `{run.name}` | {c['stability']:.2f} | {c['profit_quality']:.2f} | "
+            f"{c['drawdown_control']:.2f} | {c['sample_quality']:.2f} | "
+            f"{c['report_completeness']:.2f} |"
+        )
+    lines.append("")
+
+    lines.append("## Per-run warnings")
+    lines.append("")
+    for run in comparison.runs:
+        lines.append(f"- **`{run.name}`**: " + (", ".join(run.flags) if run.flags else "no flags"))
+    lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    lines.append(
+        "*Risk-adjusted comparison of local backtest exports. Net profit alone does "
+        "not determine the ranking. This is not financial advice; no order was placed "
+        "and no broker or terminal was contacted.*"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def build_comparison_payload(
+    comparison: ComparisonResult,
+    generated_at: Optional[datetime] = None,
+) -> dict:
+    generated_at = generated_at or datetime.now()
+    return {
+        "schema_version": "1.0",
+        "tool": {"name": "trading-lab", "version": __version__},
+        "generated_at": generated_at.isoformat(timespec="seconds"),
+        "best": comparison.best,
+        "recommendation": comparison.recommendation,
+        "reasons": list(comparison.reasons),
+        "runs": [
+            {
+                "name": run.name,
+                "source_type": run.source_type,
+                "decision": run.decision,
+                "score": {"total": run.score.total, **run.score.components},
+                "net_profit": run.net_profit,
+                "profit_factor": run.profit_factor,
+                "drawdown_pct": run.drawdown_pct,
+                "recovery_factor": run.recovery_factor,
+                "trade_count": run.trade_count,
+                "win_rate": run.win_rate,
+                "expectancy": run.expectancy,
+                "flags": list(run.flags),
+            }
+            for run in comparison.runs
+        ],
+    }
+
+
+def render_comparison_json(comparison: ComparisonResult, generated_at: Optional[datetime] = None) -> str:
+    return json.dumps(build_comparison_payload(comparison, generated_at), indent=2, ensure_ascii=False) + "\n"
 
 
 def render_column_inspection(inspection: ColumnInspection) -> str:

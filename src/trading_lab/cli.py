@@ -15,6 +15,7 @@ from .csv_deals import (
     load_column_map,
     parse_deals_csv,
 )
+from .compare import compare_deals, compare_reports
 from .decision import build_decision
 from .diagnostics import input_from_deals, input_from_report, run_diagnostics
 from .html_report import ReportParseError, parse_html_report
@@ -29,11 +30,29 @@ from .report import (
     render_analysis_json,
     render_column_inspection,
     render_column_inspection_json,
+    render_comparison_json,
+    render_comparison_markdown,
     render_deals_markdown,
     render_markdown,
     render_row_preview,
     render_row_preview_json,
 )
+
+
+def _add_threshold_args(parser: argparse.ArgumentParser) -> None:
+    """Add the shared verdict-threshold flags to a subcommand parser."""
+    parser.add_argument(
+        "--min-trades", type=int, default=Thresholds.min_trades,
+        help=f"Minimum trade count for a meaningful sample (default: {Thresholds.min_trades}).",
+    )
+    parser.add_argument(
+        "--min-profit-factor", type=float, default=Thresholds.min_profit_factor,
+        help=f"Profit factor comfort threshold (default: {Thresholds.min_profit_factor}).",
+    )
+    parser.add_argument(
+        "--max-drawdown-pct", type=float, default=Thresholds.max_drawdown_pct,
+        help=f"Relative drawdown comfort threshold, in percent (default: {Thresholds.max_drawdown_pct}).",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -235,6 +254,64 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     analyze_deals.set_defaults(handler=_handle_analyze_deals)
 
+    compare_reports_cmd = subparsers.add_parser(
+        "compare-reports",
+        help="Compare and rank several Strategy Tester HTML/HTM exports (risk-adjusted).",
+    )
+    compare_reports_cmd.add_argument(
+        "report_paths",
+        type=Path,
+        nargs="+",
+        help="Two or more Strategy Tester reports (.htm/.html) to compare.",
+    )
+    compare_reports_cmd.add_argument(
+        "--out", type=Path, default=Path("comparison.md"),
+        help="Where to write the Markdown comparison (default: comparison.md).",
+    )
+    compare_reports_cmd.add_argument(
+        "--format", choices=["markdown", "json", "both"], default="markdown",
+        help="Output format (default: markdown).",
+    )
+    compare_reports_cmd.add_argument(
+        "--json-out", type=Path, default=None,
+        help="Where to write the JSON comparison (default: alongside --out with a .json suffix).",
+    )
+    _add_threshold_args(compare_reports_cmd)
+    compare_reports_cmd.set_defaults(handler=_handle_compare_reports)
+
+    compare_deals_cmd = subparsers.add_parser(
+        "compare-deals",
+        help="Compare and rank several deals/trades CSV exports (risk-adjusted).",
+    )
+    compare_deals_cmd.add_argument(
+        "deals_paths",
+        type=Path,
+        nargs="+",
+        help="Two or more deals/trades CSV exports to compare.",
+    )
+    compare_deals_cmd.add_argument(
+        "--out", type=Path, default=Path("comparison.md"),
+        help="Where to write the Markdown comparison (default: comparison.md).",
+    )
+    compare_deals_cmd.add_argument(
+        "--format", choices=["markdown", "json", "both"], default="markdown",
+        help="Output format (default: markdown).",
+    )
+    compare_deals_cmd.add_argument(
+        "--json-out", type=Path, default=None,
+        help="Where to write the JSON comparison (default: alongside --out with a .json suffix).",
+    )
+    compare_deals_cmd.add_argument(
+        "--initial-balance", type=float, default=None,
+        help="Starting account balance, used to compute percentage drawdown (optional).",
+    )
+    compare_deals_cmd.add_argument(
+        "--column-map", type=Path, default=None,
+        help="Path to a JSON column map applied to every CSV being compared.",
+    )
+    _add_threshold_args(compare_deals_cmd)
+    compare_deals_cmd.set_defaults(handler=_handle_compare_deals)
+
     return parser
 
 
@@ -433,6 +510,83 @@ def _handle_analyze_deals(args: argparse.Namespace) -> int:
     if write_json:
         print(f"JSON written to: {_resolve_json_path(args.out, args.json_out)}")
     return 0
+
+
+def _write_comparison(args: argparse.Namespace, comparison) -> int:
+    write_markdown = args.format in ("markdown", "both")
+    write_json = args.format in ("json", "both")
+
+    if write_markdown:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(render_comparison_markdown(comparison), encoding="utf-8")
+    if write_json:
+        json_path = _resolve_json_path(args.out, args.json_out)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(render_comparison_json(comparison), encoding="utf-8")
+
+    print(f"Best candidate: {comparison.best}")
+    if write_markdown:
+        print(f"Comparison written to: {args.out}")
+    if write_json:
+        print(f"JSON written to: {_resolve_json_path(args.out, args.json_out)}")
+    return 0
+
+
+def _handle_compare_reports(args: argparse.Namespace) -> int:
+    if len(args.report_paths) < 2:
+        print("error: compare-reports needs at least two report files.", file=sys.stderr)
+        return 1
+    missing = [str(p) for p in args.report_paths if not p.exists()]
+    if missing:
+        print(f"error: report file(s) not found: {', '.join(missing)}", file=sys.stderr)
+        return 1
+
+    thresholds = Thresholds(
+        min_trades=args.min_trades,
+        min_profit_factor=args.min_profit_factor,
+        max_drawdown_pct=args.max_drawdown_pct,
+    )
+    try:
+        comparison = compare_reports(args.report_paths, thresholds)
+    except ReportParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return _write_comparison(args, comparison)
+
+
+def _handle_compare_deals(args: argparse.Namespace) -> int:
+    if len(args.deals_paths) < 2:
+        print("error: compare-deals needs at least two CSV files.", file=sys.stderr)
+        return 1
+    missing = [str(p) for p in args.deals_paths if not p.exists()]
+    if missing:
+        print(f"error: deals CSV file(s) not found: {', '.join(missing)}", file=sys.stderr)
+        return 1
+
+    column_overrides: Dict[str, str] = {}
+    if args.column_map is not None:
+        try:
+            column_overrides = load_column_map(args.column_map)
+        except DealsParseError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    thresholds = Thresholds(
+        min_trades=args.min_trades,
+        min_profit_factor=args.min_profit_factor,
+        max_drawdown_pct=args.max_drawdown_pct,
+    )
+    try:
+        comparison = compare_deals(
+            args.deals_paths,
+            thresholds,
+            column_overrides=column_overrides or None,
+            initial_balance=args.initial_balance,
+        )
+    except DealsParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return _write_comparison(args, comparison)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
