@@ -17,6 +17,7 @@ from .csv_deals import (
 )
 from .compare import compare_deals, compare_reports
 from .decision import build_decision
+from .demo_readiness import readiness_for_deals, readiness_for_report
 from .diagnostics import input_from_deals, input_from_report, run_diagnostics
 from .html_report import ReportParseError, parse_html_report
 from .metrics import (
@@ -33,6 +34,8 @@ from .report import (
     render_comparison_json,
     render_comparison_markdown,
     render_deals_markdown,
+    render_demo_readiness_json,
+    render_demo_readiness_markdown,
     render_markdown,
     render_row_preview,
     render_row_preview_json,
@@ -312,6 +315,42 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_threshold_args(compare_deals_cmd)
     compare_deals_cmd.set_defaults(handler=_handle_compare_deals)
 
+    demo_cmd = subparsers.add_parser(
+        "demo-readiness",
+        help="Produce a Ready / No / Needs Review demo-readiness report for one backtest.",
+    )
+    demo_cmd.add_argument(
+        "input_path",
+        type=Path,
+        help="A Strategy Tester report (.htm/.html) or a deals CSV (auto-detected by suffix).",
+    )
+    demo_cmd.add_argument(
+        "--deals", type=Path, default=None,
+        help="A deals CSV to assess instead of the positional input (richer per-trade data).",
+    )
+    demo_cmd.add_argument(
+        "--out", type=Path, default=Path("demo_readiness.md"),
+        help="Where to write the Markdown report (default: demo_readiness.md).",
+    )
+    demo_cmd.add_argument(
+        "--format", choices=["markdown", "json", "both"], default="markdown",
+        help="Output format (default: markdown).",
+    )
+    demo_cmd.add_argument(
+        "--json-out", type=Path, default=None,
+        help="Where to write the JSON report (default: alongside --out with a .json suffix).",
+    )
+    demo_cmd.add_argument(
+        "--initial-balance", type=float, default=None,
+        help="Starting account balance for percentage drawdown when assessing a CSV (optional).",
+    )
+    demo_cmd.add_argument(
+        "--column-map", type=Path, default=None,
+        help="Path to a JSON column map, used when the assessed source is a CSV.",
+    )
+    _add_threshold_args(demo_cmd)
+    demo_cmd.set_defaults(handler=_handle_demo_readiness)
+
     return parser
 
 
@@ -587,6 +626,64 @@ def _handle_compare_deals(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return _write_comparison(args, comparison)
+
+
+def _is_report_path(path: Path) -> bool:
+    return path.suffix.lower() in (".htm", ".html")
+
+
+def _handle_demo_readiness(args: argparse.Namespace) -> int:
+    # The CSV given by --deals takes precedence (richer per-trade data); otherwise
+    # the positional input is auto-detected as a report or a CSV by its suffix.
+    source = args.deals if args.deals is not None else args.input_path
+    if not source.exists():
+        print(f"error: file not found: {source}", file=sys.stderr)
+        return 1
+
+    thresholds = Thresholds(
+        min_trades=args.min_trades,
+        min_profit_factor=args.min_profit_factor,
+        max_drawdown_pct=args.max_drawdown_pct,
+    )
+
+    column_overrides: Dict[str, str] = {}
+    if args.column_map is not None:
+        try:
+            column_overrides = load_column_map(args.column_map)
+        except DealsParseError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    try:
+        if args.deals is None and _is_report_path(args.input_path):
+            readiness = readiness_for_report(source, thresholds)
+        else:
+            readiness = readiness_for_deals(
+                source, thresholds,
+                column_overrides=column_overrides or None,
+                initial_balance=args.initial_balance,
+            )
+    except (ReportParseError, DealsParseError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    write_markdown = args.format in ("markdown", "both")
+    write_json = args.format in ("json", "both")
+
+    if write_markdown:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(render_demo_readiness_markdown(readiness, source), encoding="utf-8")
+    if write_json:
+        json_path = _resolve_json_path(args.out, args.json_out)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(render_demo_readiness_json(readiness, source), encoding="utf-8")
+
+    print(f"Demo readiness: {readiness.status}")
+    if write_markdown:
+        print(f"Report written to: {args.out}")
+    if write_json:
+        print(f"JSON written to: {_resolve_json_path(args.out, args.json_out)}")
+    return 0
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

@@ -11,6 +11,7 @@ from . import __version__
 from .compare import ComparisonResult
 from .csv_deals import ColumnInspection, RowClassificationResult
 from .decision import DecisionReport
+from .demo_readiness import DemoReadiness
 from .diagnostics import Diagnostic
 from .metrics import DealsMetrics, Metrics, MetricResult
 from .recommend import PASS_TO_DEMO, REJECT, Recommendation, Thresholds
@@ -453,6 +454,102 @@ def build_comparison_payload(
 
 def render_comparison_json(comparison: ComparisonResult, generated_at: Optional[datetime] = None) -> str:
     return json.dumps(build_comparison_payload(comparison, generated_at), indent=2, ensure_ascii=False) + "\n"
+
+
+_READINESS_LABEL = {
+    "READY": "Ready for demo? **Yes**",
+    "NOT_READY": "Ready for demo? **No**",
+    "NEEDS_REVIEW": "Ready for demo? **Needs review**",
+}
+
+
+def render_demo_readiness_markdown(
+    readiness: DemoReadiness,
+    source_path,
+    generated_at: Optional[datetime] = None,
+) -> str:
+    generated_at = generated_at or datetime.now()
+    lines: List[str] = []
+
+    lines.append("# MT5 Demo-Readiness Report")
+    lines.append("")
+    lines.append(f"- **Source:** `{Path(source_path).name}`")
+    lines.append(
+        f"- **Generated:** {generated_at.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(local time, trading-lab v{__version__})"
+    )
+    lines.append("")
+
+    lines.append(f"## {_READINESS_LABEL.get(readiness.status, readiness.status)}")
+    lines.append("")
+    lines.append(f"Verdict `{readiness.decision}`, confidence `{readiness.confidence}`.")
+    lines.append("")
+
+    lines.append("## Evidence")
+    lines.append("")
+    lines.append("| Check | Value | OK |")
+    lines.append("| --- | --- | --- |")
+    for item in readiness.evidence:
+        mark = "—" if item.ok is None else ("yes" if item.ok else "no")
+        lines.append(f"| {item.label} | {item.value} | {mark} |")
+    lines.append("")
+
+    lines.append("## Risk diagnostics")
+    lines.append("")
+    if readiness.risk_findings:
+        for finding in readiness.risk_findings:
+            lines.append(f"- {finding}")
+    else:
+        lines.append("- None at MEDIUM severity or above.")
+    lines.append("")
+
+    lines.append("## Next actions")
+    lines.append("")
+    for action in readiness.next_actions:
+        lines.append(f"- {action}")
+    lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    lines.append(
+        "*Deterministic engineering readiness check over a local backtest export. "
+        "It is not financial advice and does not guarantee demo or live results. No "
+        "order was placed and no broker or terminal was contacted.*"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def build_demo_readiness_payload(
+    readiness: DemoReadiness,
+    source_path,
+    generated_at: Optional[datetime] = None,
+) -> dict:
+    generated_at = generated_at or datetime.now()
+    return {
+        "schema_version": "1.0",
+        "tool": {"name": "trading-lab", "version": __version__},
+        "source": Path(source_path).name,
+        "generated_at": generated_at.isoformat(timespec="seconds"),
+        "status": readiness.status,
+        "decision": readiness.decision,
+        "confidence": readiness.confidence,
+        "evidence": [
+            {"label": i.label, "value": i.value, "ok": i.ok} for i in readiness.evidence
+        ],
+        "risk_findings": list(readiness.risk_findings),
+        "next_actions": list(readiness.next_actions),
+    }
+
+
+def render_demo_readiness_json(readiness: DemoReadiness, source_path, generated_at=None) -> str:
+    return (
+        json.dumps(
+            build_demo_readiness_payload(readiness, source_path, generated_at),
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
 
 
 def render_column_inspection(inspection: ColumnInspection) -> str:
