@@ -18,6 +18,11 @@ from .csv_deals import (
 from .compare import compare_deals, compare_reports
 from .decision import build_decision
 from .demo_readiness import readiness_for_deals, readiness_for_report
+from .workflows import (
+    workflow_demo_readiness_review,
+    workflow_multi_backtest_comparison,
+    workflow_single_backtest_review,
+)
 from .diagnostics import input_from_deals, input_from_report, run_diagnostics
 from .html_report import ReportParseError, parse_html_report
 from .metrics import (
@@ -351,6 +356,39 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_threshold_args(demo_cmd)
     demo_cmd.set_defaults(handler=_handle_demo_readiness)
 
+    workflow_cmd = subparsers.add_parser(
+        "workflow",
+        help="Run a common review flow end-to-end (single-review, compare-runs, demo-readiness).",
+    )
+    workflow_sub = workflow_cmd.add_subparsers(dest="workflow_action", required=True)
+
+    wf_single = workflow_sub.add_parser(
+        "single-review", help="Review a single Strategy Tester report."
+    )
+    wf_single.add_argument("--report", type=Path, required=True, help="Strategy Tester report (.htm/.html).")
+    wf_single.add_argument("--out", type=Path, default=Path("review.md"), help="Output Markdown (default: review.md).")
+    _add_threshold_args(wf_single)
+    wf_single.set_defaults(handler=_handle_workflow_single)
+
+    wf_compare = workflow_sub.add_parser(
+        "compare-runs", help="Compare several Strategy Tester reports."
+    )
+    wf_compare.add_argument("--reports", type=Path, nargs="+", required=True, help="Two or more reports.")
+    wf_compare.add_argument("--out", type=Path, default=Path("comparison.md"), help="Output Markdown (default: comparison.md).")
+    _add_threshold_args(wf_compare)
+    wf_compare.set_defaults(handler=_handle_workflow_compare)
+
+    wf_demo = workflow_sub.add_parser(
+        "demo-readiness", help="Assess demo readiness for one backtest."
+    )
+    wf_demo.add_argument("--report", type=Path, default=None, help="Strategy Tester report (.htm/.html).")
+    wf_demo.add_argument("--deals", type=Path, default=None, help="Deals CSV (preferred source when provided).")
+    wf_demo.add_argument("--out", type=Path, default=Path("demo.md"), help="Output Markdown (default: demo.md).")
+    wf_demo.add_argument("--initial-balance", type=float, default=None, help="Starting balance for CSV percentage drawdown.")
+    wf_demo.add_argument("--column-map", type=Path, default=None, help="JSON column map for a CSV source.")
+    _add_threshold_args(wf_demo)
+    wf_demo.set_defaults(handler=_handle_workflow_demo)
+
     return parser
 
 
@@ -683,6 +721,83 @@ def _handle_demo_readiness(args: argparse.Namespace) -> int:
         print(f"Report written to: {args.out}")
     if write_json:
         print(f"JSON written to: {_resolve_json_path(args.out, args.json_out)}")
+    return 0
+
+
+def _thresholds_from(args: argparse.Namespace) -> Thresholds:
+    return Thresholds(
+        min_trades=args.min_trades,
+        min_profit_factor=args.min_profit_factor,
+        max_drawdown_pct=args.max_drawdown_pct,
+    )
+
+
+def _write_text_out(out: Path, content: str) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(content, encoding="utf-8")
+
+
+def _handle_workflow_single(args: argparse.Namespace) -> int:
+    if not args.report.exists():
+        print(f"error: report file not found: {args.report}", file=sys.stderr)
+        return 1
+    try:
+        markdown = workflow_single_backtest_review(args.report, _thresholds_from(args))
+    except ReportParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _write_text_out(args.out, markdown)
+    print(f"Review written to: {args.out}")
+    return 0
+
+
+def _handle_workflow_compare(args: argparse.Namespace) -> int:
+    if len(args.reports) < 2:
+        print("error: compare-runs needs at least two report files.", file=sys.stderr)
+        return 1
+    missing = [str(p) for p in args.reports if not p.exists()]
+    if missing:
+        print(f"error: report file(s) not found: {', '.join(missing)}", file=sys.stderr)
+        return 1
+    try:
+        markdown = workflow_multi_backtest_comparison(args.reports, _thresholds_from(args))
+    except ReportParseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _write_text_out(args.out, markdown)
+    print(f"Comparison written to: {args.out}")
+    return 0
+
+
+def _handle_workflow_demo(args: argparse.Namespace) -> int:
+    if args.report is None and args.deals is None:
+        print("error: provide --report and/or --deals.", file=sys.stderr)
+        return 1
+    source = args.deals if args.deals is not None else args.report
+    if not source.exists():
+        print(f"error: file not found: {source}", file=sys.stderr)
+        return 1
+
+    column_overrides: Dict[str, str] = {}
+    if args.column_map is not None:
+        try:
+            column_overrides = load_column_map(args.column_map)
+        except DealsParseError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    try:
+        markdown = workflow_demo_readiness_review(
+            report_path=args.report,
+            deals_path=args.deals,
+            thresholds=_thresholds_from(args),
+            column_overrides=column_overrides or None,
+            initial_balance=args.initial_balance,
+        )
+    except (ReportParseError, DealsParseError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _write_text_out(args.out, markdown)
+    print(f"Demo-readiness review written to: {args.out}")
     return 0
 
 
