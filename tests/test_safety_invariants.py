@@ -190,6 +190,30 @@ def test_no_mcp_imports():
     assert not offenders, f"MCP imports found in src/ (must be optional, not required): {offenders}"
 
 
+# --- 5b. No broker / MT5 terminal dependency in src/ -------------------------
+
+FORBIDDEN_BROKER_MODULES = {
+    "MetaTrader5",
+    "metatrader5",
+    "mt5",
+    "ib_insync",
+    "ibapi",
+    "ccxt",
+    "oandapyV20",
+    "alpaca_trade_api",
+}
+
+
+def test_no_broker_or_terminal_imports():
+    offenders: Dict[str, Set[str]] = {}
+    for path in _source_files():
+        roots, _ = _imports(_read(path))
+        bad = roots & FORBIDDEN_BROKER_MODULES
+        if bad:
+            offenders[str(path.relative_to(SRC_DIR))] = bad
+    assert not offenders, f"Broker/MT5 terminal imports found in src/: {offenders}"
+
+
 # --- 6. CLI remains local file-in / file-out only ----------------------------
 
 FORBIDDEN_CLI_COMMANDS = {

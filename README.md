@@ -1,7 +1,7 @@
 # mt5-trading-lab
 
-A local-first toolkit for analyzing **MetaTrader 5 Strategy Tester** reports
-and trade history exports.
+A local-first **Report Intelligence Engine** for analyzing **MetaTrader 5
+Strategy Tester** reports and trade history exports.
 
 ## What this project is
 
@@ -9,19 +9,28 @@ and trade history exports.
 
 - Parses a Strategy Tester report (`.htm`/`.html`) or a deals/trades CSV
   that you export by hand from MT5.
-- Computes the metrics that matter for deciding whether a strategy is worth
-  a demo run: profit factor, drawdown, recovery factor, trade count, net
-  profit.
-- Writes a plain Markdown summary with one of three deterministic,
-  explainable verdicts:
-  - `PASS_TO_DEMO`
-  - `NEEDS_REVIEW`
-  - `REJECT`
+- Computes a broad metric set (profit factor, drawdown, recovery factor,
+  expectancy, payoff, equity/drawdown curves, long/short split, symbol and
+  monthly distributions, ...), marking anything it cannot derive as
+  **unavailable with a reason** rather than guessing.
+- Runs a **diagnostics** layer that flags sample-quality, risk, and overfit /
+  too-good-to-be-true problems with the result.
+- Writes a Markdown **and/or JSON** report with one of three deterministic,
+  explainable verdicts (`PASS_TO_DEMO`, `NEEDS_REVIEW`, `REJECT`) plus a
+  structured decision report (confidence, blocking/review reasons, next actions).
+- **Compares and ranks** several backtests risk-adjusted (`compare-reports`,
+  `compare-deals`) — high net profit alone never wins.
+- Produces a focused **demo-readiness** verdict (`demo-readiness`: Ready / No /
+  Needs Review) backed by evidence.
+- Bundles common flows into a thin local **workflow** layer (`workflow
+  single-review | compare-runs | demo-readiness`).
 - Lets you inspect and audit how a CSV's columns and rows are interpreted
   (`--list-columns`, `--preview-rows`) before trusting the final numbers.
 
 Everything runs on your own machine, on files you already exported. There
-is nothing to deploy, host, or keep running.
+is nothing to deploy, host, or keep running. See
+[docs/REPORT_INTELLIGENCE_ENGINE.md](docs/REPORT_INTELLIGENCE_ENGINE.md) for the
+full picture and [docs/EXAMPLES.md](docs/EXAMPLES.md) for copy-paste commands.
 
 ## What this project is not
 
@@ -49,7 +58,7 @@ is nothing to deploy, host, or keep running.
   Python — the report/CSV files themselves are portable).
 - **Offline-first.** No network calls, no telemetry, no cloud service.
 - **File-in / file-out.** Every command reads a local file and either
-  writes a local Markdown file or prints to stdout. Nothing persists
+  writes a local Markdown/JSON file or prints to stdout. Nothing persists
   between runs beyond the files you explicitly asked for.
 - **No VPS.** Nothing to deploy, host, or keep running 24/7.
 - **No background daemon.** Every command runs once and exits.
@@ -355,6 +364,63 @@ A `PASS_TO_DEMO` verdict means "worth running on a demo account next," not
 "guaranteed profitable." Treat every recommendation as a local screening
 aid, not financial advice.
 
+## Report intelligence commands
+
+Beyond single-report analysis, the engine compares runs, diagnoses quality
+problems, and produces decision-oriented reports. All of it is local and
+deterministic.
+
+### Structured JSON output
+
+`analyze-report` and `analyze-deals` accept `--format markdown|json|both` and an
+optional `--json-out`. The default stays Markdown, so existing usage is
+unchanged.
+
+```bash
+python -m trading_lab analyze-report report.htm --format both --out r.md --json-out r.json
+```
+
+The JSON payload contains machine-readable metrics, diagnostics, the verdict with
+confidence and next actions, and a data-quality summary. See
+[docs/JSON_OUTPUT_SCHEMA.md](docs/JSON_OUTPUT_SCHEMA.md).
+
+### Comparing several backtests (risk-adjusted)
+
+```bash
+python -m trading_lab compare-reports run1.htm run2.htm run3.htm --out comparison.md --format both
+python -m trading_lab compare-deals run1.csv run2.csv run3.csv --out comparison.md --initial-balance 10000
+```
+
+Runs are ranked on a deterministic, risk-adjusted score (profit quality,
+drawdown control, sample quality, stability, data completeness) — the highest net
+profit does not automatically win. See
+[docs/COMPARISON_ENGINE.md](docs/COMPARISON_ENGINE.md).
+
+### Demo-readiness
+
+```bash
+python -m trading_lab demo-readiness report.htm --deals deals.csv --out demo_readiness.md --format both
+```
+
+Answers Ready / No / Needs Review with the evidence behind the call. See
+[docs/DEMO_READINESS.md](docs/DEMO_READINESS.md).
+
+### Workflows
+
+```bash
+python -m trading_lab workflow single-review --report report.htm --out review.md
+python -m trading_lab workflow compare-runs --reports r1.htm r2.htm --out comparison.md
+python -m trading_lab workflow demo-readiness --report report.htm --deals deals.csv --out demo.md
+```
+
+### Diagnostics
+
+Every analysis runs a diagnostics layer (low sample size, missing cost data,
+high drawdown, fat-tail losses, drawdown clusters, unstable equity curves,
+unrealistic profit factor, overfit risk, ...), each with a severity. See
+[docs/DIAGNOSTICS_REFERENCE.md](docs/DIAGNOSTICS_REFERENCE.md) and
+[docs/METRICS_REFERENCE.md](docs/METRICS_REFERENCE.md).
+
 ## Troubleshooting
 
 - **"No usable profit column was found."** — Run `--list-columns` to see
@@ -389,16 +455,24 @@ before a tag/release is created.
 
 ```
 src/trading_lab/
-  html_report.py   # parses MT5 Strategy Tester .htm/.html exports
-  csv_deals.py      # parses MT5 deals/trades CSV exports + column mapping
-  metrics.py        # turns parsed fields into typed metrics
-  recommend.py      # PASS_TO_DEMO / NEEDS_REVIEW / REJECT rules
-  report.py         # renders the Markdown reports
-  cli.py            # `analyze-report` / `analyze-deals` commands
+  html_report.py     # parses MT5 Strategy Tester .htm/.html exports
+  csv_deals.py        # parses MT5 deals/trades CSV exports + column mapping
+  metrics.py          # typed metrics + machine-readable MetricResult layer
+  recommend.py        # PASS_TO_DEMO / NEEDS_REVIEW / REJECT rules
+  diagnostics.py      # sample-quality / risk / overfit diagnostics
+  decision.py         # structured decision report (confidence, next actions)
+  compare.py          # risk-adjusted multi-backtest comparison
+  demo_readiness.py   # Ready / No / Needs Review verdict + evidence
+  workflows.py        # thin local orchestration flows
+  report.py           # renders Markdown and JSON reports
+  cli.py              # all CLI commands
 tests/
-  fixtures/         # sample Strategy Tester report and CSV deals exports used in tests
+  fixtures/           # sample reports and CSV deals exports used in tests
 docs/
-  USAGE.md          # recommended step-by-step CSV/HTML workflows
+  REPORT_INTELLIGENCE_ENGINE.md, CORE_SAFETY_BOUNDARY.md, METRICS_REFERENCE.md,
+  DIAGNOSTICS_REFERENCE.md, COMPARISON_ENGINE.md, DEMO_READINESS.md,
+  JSON_OUTPUT_SCHEMA.md, OPTIONAL_MCP_WRAPPER.md, AGENT_STACK_INTEGRATION.md,
+  CLAUDE_COWORK_HANDOFF.md, EXAMPLES.md, USAGE.md
 ```
 
 ## Known limitations
@@ -424,10 +498,12 @@ docs/
 - Broker account connections or password handling.
 - Continuous/background operation, schedulers, or a server component.
 - VPS or cloud deployment.
-- `metatrader5-mcp` integration (planned as an optional add-on later, never
-  required).
-- JSON output, plotting, or new analysis metrics beyond what's documented
-  above (kept out to keep the tool auditable and dependency-free).
+- `metatrader5-mcp` integration and any MCP wrapper as a **required**
+  dependency. An optional MCP adapter is planned as a *separate* follow-up that
+  lives outside `src/trading_lab/` and is never required — see
+  [docs/OPTIONAL_MCP_WRAPPER.md](docs/OPTIONAL_MCP_WRAPPER.md).
+- Plotting / charting (the engine emits the underlying equity and drawdown
+  *series* in JSON, but renders no images).
 
 ## Development
 

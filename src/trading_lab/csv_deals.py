@@ -41,6 +41,12 @@ class Deal:
     symbol: Optional[str] = None
     volume: Optional[float] = None
     comment: Optional[str] = None
+    # Best-effort trade direction ("long"/"short") derived from the type column,
+    # and the raw time string from the time column. Both are ``None`` when the
+    # source CSV does not carry that data, so downstream metrics that need them
+    # are marked unavailable rather than guessed.
+    direction: Optional[str] = None
+    time: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +243,23 @@ def _is_non_trade_type(type_value: str) -> bool:
     if not slug:
         return False
     return bool(set(slug.split("_")) & _NON_TRADE_TYPE_TOKENS)
+
+
+def _deal_direction(type_value: Optional[str]) -> Optional[str]:
+    """Best-effort long/short direction from a deal-type token.
+
+    Returns ``"long"`` for buy-side deals, ``"short"`` for sell-side deals, and
+    ``None`` when the type is absent or unrecognized (so long/short split is
+    reported as unavailable rather than guessed).
+    """
+    if not type_value:
+        return None
+    tokens = set(_slugify(type_value).split("_"))
+    if "buy" in tokens:
+        return "long"
+    if "sell" in tokens:
+        return "short"
+    return None
 
 
 # Header slugs that strongly suggest a deal-type/entry-direction column
@@ -526,6 +549,8 @@ def parse_deals_csv(path, column_overrides: Optional[Dict[str, str]] = None) -> 
                 symbol=record.get("symbol") or None,
                 volume=_to_float(record.get("volume")),
                 comment=record.get("comment") or None,
+                direction=_deal_direction(record.get("type")),
+                time=record.get("time") or None,
             )
         )
 

@@ -4,7 +4,34 @@ All notable changes to this project are documented in this file.
 
 ## Next - unreleased
 
-### Added
+### Added — Report Intelligence Engine
+
+- Expanded metrics engine: recovery factor, average trade, expectancy, drawdown
+  curve, long/short split, symbol distribution, and monthly returns, plus a
+  machine-readable `MetricResult` layer that marks underivable metrics as
+  unavailable with a reason instead of guessing.
+- Diagnostics engine (`diagnostics.py`): deterministic sample-quality, risk, and
+  overfit / too-good-to-be-true flags with `INFO`/`LOW`/`MEDIUM`/`HIGH`/
+  `BLOCKING` severities.
+- Structured JSON output and decision report for `analyze-report` /
+  `analyze-deals` via `--format markdown|json|both` and `--json-out`
+  (default stays Markdown). Includes verdict confidence, blocking/review reasons,
+  next actions, and a data-quality summary.
+- Risk-adjusted multi-backtest comparison: `compare-reports` and `compare-deals`
+  rank runs on a deterministic score (stability, profit quality, drawdown
+  control, sample quality, data completeness) — net profit alone never wins.
+- Demo-readiness report: `demo-readiness` (Ready / No / Needs Review) backed by
+  evidence and risk diagnostics.
+- Lightweight local workflow layer: `workflow single-review | compare-runs |
+  demo-readiness`.
+- New docs: report intelligence overview, core safety boundary, metrics,
+  diagnostics, comparison, demo-readiness, JSON schema, optional MCP wrapper
+  (deferred), agent-stack integration, Claude Cowork handoff, and examples.
+- Additional safety tests: `tests/test_core_no_mcp_dependency.py`,
+  `tests/test_core_no_broker_dependency.py`, and a broker/MT5 import guard in
+  `tests/test_safety_invariants.py`.
+
+### Added — earlier in this cycle
 
 - JSON output for CSV audit commands:
   - `analyze-deals --list-columns --format json`

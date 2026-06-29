@@ -169,22 +169,30 @@ def test_preview_rows_json_malformed_profit_exits_one_but_still_valid_json(tmp_p
     assert payload["summary"]["errors"]
 
 
-def test_format_json_without_list_columns_or_preview_rows_returns_one(tmp_path, capsys):
+def test_format_json_writes_structured_report_not_markdown(tmp_path, capsys):
+    out_md = tmp_path / "deals_report.md"
+    json_out = tmp_path / "deals_report.json"
     exit_code, captured = _run_json(
         [
             "analyze-deals",
             str(FIXTURES / "sample_deals.csv"),
             "--out",
-            str(tmp_path / "deals_report.md"),
+            str(out_md),
+            "--json-out",
+            str(json_out),
             "--format",
             "json",
         ],
         capsys,
     )
 
-    assert exit_code == 1
-    assert "--format json" in captured.err
-    assert not (tmp_path / "deals_report.md").exists()
+    assert exit_code == 0
+    # --format json writes only the JSON report, not the Markdown one.
+    assert json_out.exists()
+    assert not out_md.exists()
+    payload = json.loads(json_out.read_text())
+    assert payload["input"]["type"] == "deals_csv"
+    assert payload["verdict"]["decision"]
 
 
 def test_format_invalid_value_rejected_by_argparse(capsys):

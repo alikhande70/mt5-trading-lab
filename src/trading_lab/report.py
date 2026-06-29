@@ -8,8 +8,12 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 from . import __version__
+from .compare import ComparisonResult
 from .csv_deals import ColumnInspection, RowClassificationResult
-from .metrics import DealsMetrics, Metrics
+from .decision import DecisionReport
+from .demo_readiness import DemoReadiness
+from .diagnostics import Diagnostic
+from .metrics import DealsMetrics, Metrics, MetricResult
 from .recommend import PASS_TO_DEMO, REJECT, Recommendation, Thresholds
 
 
@@ -265,6 +269,287 @@ def render_deals_markdown(
     )
 
     return "\n".join(lines) + "\n"
+
+
+def _metric_results_to_dict(metric_results: List[MetricResult]) -> dict:
+    return {
+        r.name: {
+            "value": r.value,
+            "available": r.available,
+            "reason_if_unavailable": r.reason_if_unavailable,
+            "source": r.source,
+            "warnings": list(r.warnings),
+        }
+        for r in metric_results
+    }
+
+
+def _data_quality(metric_results: List[MetricResult]) -> dict:
+    unavailable = [r.name for r in metric_results if not r.available]
+    return {
+        "metrics_total": len(metric_results),
+        "metrics_available": len(metric_results) - len(unavailable),
+        "metrics_unavailable": unavailable,
+    }
+
+
+def build_analysis_payload(
+    source_path,
+    input_type: str,
+    metric_results: List[MetricResult],
+    diagnostics: List[Diagnostic],
+    decision: DecisionReport,
+    thresholds: Thresholds,
+    warnings: Optional[List[str]] = None,
+    assumptions: Optional[List[str]] = None,
+    parsed_at: Optional[datetime] = None,
+) -> dict:
+    """Build the canonical, machine-readable analysis payload (a plain dict).
+
+    ``parsed_at`` is injectable so the output is fully deterministic in tests.
+    """
+    parsed_at = parsed_at or datetime.now()
+    return {
+        "schema_version": "1.0",
+        "tool": {"name": "trading-lab", "version": __version__},
+        "input": {
+            "file": Path(source_path).name,
+            "type": input_type,
+            "parsed_at": parsed_at.isoformat(timespec="seconds"),
+        },
+        "metrics": _metric_results_to_dict(metric_results),
+        "diagnostics": [
+            {
+                "code": d.code,
+                "severity": d.severity,
+                "message": d.message,
+                "recommendation": d.recommendation,
+            }
+            for d in diagnostics
+        ],
+        "verdict": {
+            "decision": decision.decision,
+            "confidence": decision.confidence,
+            "blocking_reasons": list(decision.blocking_reasons),
+            "review_reasons": list(decision.review_reasons),
+            "passed": list(decision.passed),
+            "next_actions": list(decision.next_actions),
+        },
+        "warnings": list(warnings or []),
+        "assumptions": list(assumptions or []),
+        "data_quality": _data_quality(metric_results),
+        "thresholds": {
+            "min_trades": thresholds.min_trades,
+            "min_profit_factor": thresholds.min_profit_factor,
+            "reject_profit_factor": thresholds.reject_profit_factor,
+            "max_drawdown_pct": thresholds.max_drawdown_pct,
+            "reject_drawdown_pct": thresholds.reject_drawdown_pct,
+            "min_recovery_factor": thresholds.min_recovery_factor,
+        },
+    }
+
+
+def render_analysis_json(*args, **kwargs) -> str:
+    """Serialize :func:`build_analysis_payload` to a JSON string."""
+    payload = build_analysis_payload(*args, **kwargs)
+    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+
+
+def render_comparison_markdown(
+    comparison: ComparisonResult,
+    generated_at: Optional[datetime] = None,
+) -> str:
+    generated_at = generated_at or datetime.now()
+    lines: List[str] = []
+
+    lines.append("# MT5 Backtest Comparison")
+    lines.append("")
+    lines.append(
+        f"Generated: {generated_at.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(local time, trading-lab v{__version__})"
+    )
+    lines.append("")
+
+    lines.append("## Recommendation")
+    lines.append("")
+    lines.append(comparison.recommendation)
+    for reason in comparison.reasons:
+        lines.append(f"- {reason}")
+    lines.append("")
+
+    lines.append("## Ranking (risk-adjusted, best first)")
+    lines.append("")
+    lines.append("| Rank | Run | Score | Verdict | Net profit | Profit factor | Drawdown | Trades | Flags |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for index, run in enumerate(comparison.runs, start=1):
+        dd = _fmt(run.drawdown_pct, "%") if run.drawdown_pct is not None else "n/a"
+        flags = ", ".join(run.flags) if run.flags else "-"
+        lines.append(
+            f"| {index} | `{run.name}` | {run.score.total:.1f} | {run.decision} | "
+            f"{_fmt(run.net_profit)} | {_fmt(run.profit_factor)} | {dd} | "
+            f"{_fmt(run.trade_count)} | {flags} |"
+        )
+    lines.append("")
+
+    lines.append("## Score breakdown")
+    lines.append("")
+    lines.append("| Run | Stability | Profit quality | Drawdown control | Sample quality | Completeness |")
+    lines.append("| --- | --- | --- | --- | --- | --- |")
+    for run in comparison.runs:
+        c = run.score.components
+        lines.append(
+            f"| `{run.name}` | {c['stability']:.2f} | {c['profit_quality']:.2f} | "
+            f"{c['drawdown_control']:.2f} | {c['sample_quality']:.2f} | "
+            f"{c['report_completeness']:.2f} |"
+        )
+    lines.append("")
+
+    lines.append("## Per-run warnings")
+    lines.append("")
+    for run in comparison.runs:
+        lines.append(f"- **`{run.name}`**: " + (", ".join(run.flags) if run.flags else "no flags"))
+    lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    lines.append(
+        "*Risk-adjusted comparison of local backtest exports. Net profit alone does "
+        "not determine the ranking. This is not financial advice; no order was placed "
+        "and no broker or terminal was contacted.*"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def build_comparison_payload(
+    comparison: ComparisonResult,
+    generated_at: Optional[datetime] = None,
+) -> dict:
+    generated_at = generated_at or datetime.now()
+    return {
+        "schema_version": "1.0",
+        "tool": {"name": "trading-lab", "version": __version__},
+        "generated_at": generated_at.isoformat(timespec="seconds"),
+        "best": comparison.best,
+        "recommendation": comparison.recommendation,
+        "reasons": list(comparison.reasons),
+        "runs": [
+            {
+                "name": run.name,
+                "source_type": run.source_type,
+                "decision": run.decision,
+                "score": {"total": run.score.total, **run.score.components},
+                "net_profit": run.net_profit,
+                "profit_factor": run.profit_factor,
+                "drawdown_pct": run.drawdown_pct,
+                "recovery_factor": run.recovery_factor,
+                "trade_count": run.trade_count,
+                "win_rate": run.win_rate,
+                "expectancy": run.expectancy,
+                "flags": list(run.flags),
+            }
+            for run in comparison.runs
+        ],
+    }
+
+
+def render_comparison_json(comparison: ComparisonResult, generated_at: Optional[datetime] = None) -> str:
+    return json.dumps(build_comparison_payload(comparison, generated_at), indent=2, ensure_ascii=False) + "\n"
+
+
+_READINESS_LABEL = {
+    "READY": "Ready for demo? **Yes**",
+    "NOT_READY": "Ready for demo? **No**",
+    "NEEDS_REVIEW": "Ready for demo? **Needs review**",
+}
+
+
+def render_demo_readiness_markdown(
+    readiness: DemoReadiness,
+    source_path,
+    generated_at: Optional[datetime] = None,
+) -> str:
+    generated_at = generated_at or datetime.now()
+    lines: List[str] = []
+
+    lines.append("# MT5 Demo-Readiness Report")
+    lines.append("")
+    lines.append(f"- **Source:** `{Path(source_path).name}`")
+    lines.append(
+        f"- **Generated:** {generated_at.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(local time, trading-lab v{__version__})"
+    )
+    lines.append("")
+
+    lines.append(f"## {_READINESS_LABEL.get(readiness.status, readiness.status)}")
+    lines.append("")
+    lines.append(f"Verdict `{readiness.decision}`, confidence `{readiness.confidence}`.")
+    lines.append("")
+
+    lines.append("## Evidence")
+    lines.append("")
+    lines.append("| Check | Value | OK |")
+    lines.append("| --- | --- | --- |")
+    for item in readiness.evidence:
+        mark = "—" if item.ok is None else ("yes" if item.ok else "no")
+        lines.append(f"| {item.label} | {item.value} | {mark} |")
+    lines.append("")
+
+    lines.append("## Risk diagnostics")
+    lines.append("")
+    if readiness.risk_findings:
+        for finding in readiness.risk_findings:
+            lines.append(f"- {finding}")
+    else:
+        lines.append("- None at MEDIUM severity or above.")
+    lines.append("")
+
+    lines.append("## Next actions")
+    lines.append("")
+    for action in readiness.next_actions:
+        lines.append(f"- {action}")
+    lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    lines.append(
+        "*Deterministic engineering readiness check over a local backtest export. "
+        "It is not financial advice and does not guarantee demo or live results. No "
+        "order was placed and no broker or terminal was contacted.*"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def build_demo_readiness_payload(
+    readiness: DemoReadiness,
+    source_path,
+    generated_at: Optional[datetime] = None,
+) -> dict:
+    generated_at = generated_at or datetime.now()
+    return {
+        "schema_version": "1.0",
+        "tool": {"name": "trading-lab", "version": __version__},
+        "source": Path(source_path).name,
+        "generated_at": generated_at.isoformat(timespec="seconds"),
+        "status": readiness.status,
+        "decision": readiness.decision,
+        "confidence": readiness.confidence,
+        "evidence": [
+            {"label": i.label, "value": i.value, "ok": i.ok} for i in readiness.evidence
+        ],
+        "risk_findings": list(readiness.risk_findings),
+        "next_actions": list(readiness.next_actions),
+    }
+
+
+def render_demo_readiness_json(readiness: DemoReadiness, source_path, generated_at=None) -> str:
+    return (
+        json.dumps(
+            build_demo_readiness_payload(readiness, source_path, generated_at),
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
 
 
 def render_column_inspection(inspection: ColumnInspection) -> str:
