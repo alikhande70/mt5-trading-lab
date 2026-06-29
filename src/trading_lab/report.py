@@ -9,7 +9,9 @@ from typing import List, Optional, Tuple, Union
 
 from . import __version__
 from .csv_deals import ColumnInspection, RowClassificationResult
-from .metrics import DealsMetrics, Metrics
+from .decision import DecisionReport
+from .diagnostics import Diagnostic
+from .metrics import DealsMetrics, Metrics, MetricResult
 from .recommend import PASS_TO_DEMO, REJECT, Recommendation, Thresholds
 
 
@@ -265,6 +267,90 @@ def render_deals_markdown(
     )
 
     return "\n".join(lines) + "\n"
+
+
+def _metric_results_to_dict(metric_results: List[MetricResult]) -> dict:
+    return {
+        r.name: {
+            "value": r.value,
+            "available": r.available,
+            "reason_if_unavailable": r.reason_if_unavailable,
+            "source": r.source,
+            "warnings": list(r.warnings),
+        }
+        for r in metric_results
+    }
+
+
+def _data_quality(metric_results: List[MetricResult]) -> dict:
+    unavailable = [r.name for r in metric_results if not r.available]
+    return {
+        "metrics_total": len(metric_results),
+        "metrics_available": len(metric_results) - len(unavailable),
+        "metrics_unavailable": unavailable,
+    }
+
+
+def build_analysis_payload(
+    source_path,
+    input_type: str,
+    metric_results: List[MetricResult],
+    diagnostics: List[Diagnostic],
+    decision: DecisionReport,
+    thresholds: Thresholds,
+    warnings: Optional[List[str]] = None,
+    assumptions: Optional[List[str]] = None,
+    parsed_at: Optional[datetime] = None,
+) -> dict:
+    """Build the canonical, machine-readable analysis payload (a plain dict).
+
+    ``parsed_at`` is injectable so the output is fully deterministic in tests.
+    """
+    parsed_at = parsed_at or datetime.now()
+    return {
+        "schema_version": "1.0",
+        "tool": {"name": "trading-lab", "version": __version__},
+        "input": {
+            "file": Path(source_path).name,
+            "type": input_type,
+            "parsed_at": parsed_at.isoformat(timespec="seconds"),
+        },
+        "metrics": _metric_results_to_dict(metric_results),
+        "diagnostics": [
+            {
+                "code": d.code,
+                "severity": d.severity,
+                "message": d.message,
+                "recommendation": d.recommendation,
+            }
+            for d in diagnostics
+        ],
+        "verdict": {
+            "decision": decision.decision,
+            "confidence": decision.confidence,
+            "blocking_reasons": list(decision.blocking_reasons),
+            "review_reasons": list(decision.review_reasons),
+            "passed": list(decision.passed),
+            "next_actions": list(decision.next_actions),
+        },
+        "warnings": list(warnings or []),
+        "assumptions": list(assumptions or []),
+        "data_quality": _data_quality(metric_results),
+        "thresholds": {
+            "min_trades": thresholds.min_trades,
+            "min_profit_factor": thresholds.min_profit_factor,
+            "reject_profit_factor": thresholds.reject_profit_factor,
+            "max_drawdown_pct": thresholds.max_drawdown_pct,
+            "reject_drawdown_pct": thresholds.reject_drawdown_pct,
+            "min_recovery_factor": thresholds.min_recovery_factor,
+        },
+    }
+
+
+def render_analysis_json(*args, **kwargs) -> str:
+    """Serialize :func:`build_analysis_payload` to a JSON string."""
+    payload = build_analysis_payload(*args, **kwargs)
+    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
 def render_column_inspection(inspection: ColumnInspection) -> str:

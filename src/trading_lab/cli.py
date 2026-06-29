@@ -15,10 +15,18 @@ from .csv_deals import (
     load_column_map,
     parse_deals_csv,
 )
+from .decision import build_decision
+from .diagnostics import input_from_deals, input_from_report, run_diagnostics
 from .html_report import ReportParseError, parse_html_report
-from .metrics import compute_deals_metrics, compute_metrics
+from .metrics import (
+    compute_deals_metrics,
+    compute_metrics,
+    deals_metric_results,
+    report_metric_results,
+)
 from .recommend import Thresholds, evaluate, evaluate_core
 from .report import (
+    render_analysis_json,
     render_column_inspection,
     render_column_inspection_json,
     render_deals_markdown,
@@ -73,6 +81,21 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=Thresholds.max_drawdown_pct,
         help=f"Relative drawdown comfort threshold, in percent (default: {Thresholds.max_drawdown_pct}).",
+    )
+    analyze.add_argument(
+        "--format",
+        choices=["markdown", "json", "both"],
+        default="markdown",
+        help=(
+            "Output format (default: markdown). 'json' writes a structured JSON "
+            "report instead of Markdown; 'both' writes Markdown and JSON."
+        ),
+    )
+    analyze.add_argument(
+        "--json-out",
+        type=Path,
+        default=None,
+        help="Where to write the JSON report (default: alongside --out with a .json suffix).",
     )
     analyze.set_defaults(handler=_handle_analyze_report)
 
@@ -195,17 +218,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     analyze_deals.add_argument(
         "--format",
-        choices=["text", "json"],
-        default="text",
+        choices=["text", "markdown", "json", "both"],
+        default="markdown",
         help=(
-            "Output format for --list-columns / --preview-rows (default: text). "
-            "JSON is intended for scripts and CI checks; not yet supported for the "
-            "full analysis report."
+            "Output format (default: markdown). For the full analysis: 'json' "
+            "writes a structured JSON report, 'both' writes Markdown and JSON. "
+            "For the --list-columns / --preview-rows audit modes: 'json' emits "
+            "machine-readable audit output, anything else stays plain text."
         ),
+    )
+    analyze_deals.add_argument(
+        "--json-out",
+        type=Path,
+        default=None,
+        help="Where to write the JSON report (default: alongside --out with a .json suffix).",
     )
     analyze_deals.set_defaults(handler=_handle_analyze_deals)
 
     return parser
+
+
+def _resolve_json_path(out: Path, json_out: Optional[Path]) -> Path:
+    return json_out if json_out is not None else out.with_suffix(".json")
 
 
 def _handle_analyze_report(args: argparse.Namespace) -> int:
@@ -226,13 +260,38 @@ def _handle_analyze_report(args: argparse.Namespace) -> int:
         max_drawdown_pct=args.max_drawdown_pct,
     )
     recommendation = evaluate(metrics, thresholds)
-    markdown = render_markdown(args.report_path, metrics, recommendation, thresholds)
+    diagnostics = run_diagnostics(input_from_report(metrics), thresholds)
+    decision = build_decision(recommendation, diagnostics)
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(markdown, encoding="utf-8")
+    write_markdown = args.format in ("markdown", "both")
+    write_json = args.format in ("json", "both")
+
+    if write_markdown:
+        markdown = render_markdown(args.report_path, metrics, recommendation, thresholds)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+
+    if write_json:
+        json_path = _resolve_json_path(args.out, args.json_out)
+        payload = render_analysis_json(
+            args.report_path,
+            "strategy_tester_html",
+            report_metric_results(metrics),
+            diagnostics,
+            decision,
+            thresholds,
+            assumptions=[
+                "Metrics are taken as reported in the MT5 Strategy Tester summary.",
+            ],
+        )
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(payload, encoding="utf-8")
 
     print(f"Recommendation: {recommendation.verdict}")
-    print(f"Report written to: {args.out}")
+    if write_markdown:
+        print(f"Report written to: {args.out}")
+    if write_json:
+        print(f"JSON written to: {_resolve_json_path(args.out, args.json_out)}")
     return 0
 
 
@@ -243,13 +302,6 @@ def _handle_analyze_deals(args: argparse.Namespace) -> int:
 
     if args.max_preview_rows <= 0:
         print("error: --max-preview-rows must be a positive integer.", file=sys.stderr)
-        return 1
-
-    if args.format == "json" and not (args.list_columns or args.preview_rows):
-        print(
-            "error: --format json is currently supported only with --list-columns or --preview-rows.",
-            file=sys.stderr,
-        )
         return 1
 
     if not args.deals_path.exists():
@@ -342,13 +394,44 @@ def _handle_analyze_deals(args: argparse.Namespace) -> int:
             "(only the absolute drawdown amount was computed)."
         )
 
-    markdown = render_deals_markdown(args.deals_path, metrics, recommendation, thresholds, warnings)
+    diagnostics = run_diagnostics(input_from_deals(metrics), thresholds)
+    decision = build_decision(recommendation, diagnostics)
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(markdown, encoding="utf-8")
+    # 'text' maps to markdown for the full analysis (back-compat: the old
+    # default never affected the written report, which was always Markdown).
+    write_markdown = args.format in ("markdown", "both", "text")
+    write_json = args.format in ("json", "both")
+
+    if write_markdown:
+        markdown = render_deals_markdown(
+            args.deals_path, metrics, recommendation, thresholds, warnings
+        )
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+
+    if write_json:
+        json_path = _resolve_json_path(args.out, args.json_out)
+        payload = render_analysis_json(
+            args.deals_path,
+            "deals_csv",
+            deals_metric_results(metrics),
+            diagnostics,
+            decision,
+            thresholds,
+            warnings=warnings,
+            assumptions=[
+                "Metrics are recomputed from the per-deal CSV ledger.",
+                "Drawdown is measured on the cumulative closed-trade profit curve.",
+            ],
+        )
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(payload, encoding="utf-8")
 
     print(f"Recommendation: {recommendation.verdict}")
-    print(f"Report written to: {args.out}")
+    if write_markdown:
+        print(f"Report written to: {args.out}")
+    if write_json:
+        print(f"JSON written to: {_resolve_json_path(args.out, args.json_out)}")
     return 0
 
 
