@@ -477,7 +477,7 @@ docs/
   REPORT_INTELLIGENCE_ENGINE.md, CORE_SAFETY_BOUNDARY.md, METRICS_REFERENCE.md,
   DIAGNOSTICS_REFERENCE.md, COMPARISON_ENGINE.md, DEMO_READINESS.md,
   JSON_OUTPUT_SCHEMA.md, OPTIONAL_MCP_WRAPPER.md, AGENT_STACK_INTEGRATION.md,
-  INSTALL_RUNBOOK.md, EXAMPLES.md, USAGE.md
+  INSTALL_RUNBOOK.md, LOCAL_DESKTOP_UI_DESIGN.md, EXAMPLES.md, USAGE.md
 ```
 
 ## Known limitations
@@ -509,6 +509,10 @@ docs/
   [docs/OPTIONAL_MCP_WRAPPER.md](docs/OPTIONAL_MCP_WRAPPER.md).
 - Plotting / charting (the engine emits the underlying equity and drawdown
   *series* in JSON, but renders no images).
+- A graphical interface. A future optional local desktop UI is *designed but not
+  implemented* — it would only wrap the existing file-in/file-out commands and
+  preserve every safety boundary. Design document only:
+  [docs/LOCAL_DESKTOP_UI_DESIGN.md](docs/LOCAL_DESKTOP_UI_DESIGN.md).
 
 ## Development
 
