@@ -2,8 +2,7 @@
 
 Both `analyze-report` and `analyze-deals` can emit a structured JSON report in
 addition to (or instead of) Markdown. This format is intended for scripts, CI
-checks, and agents (Claude Code / Claude Cowork) that need a machine-readable,
-auditable result.
+checks, and agents and scripts that need a machine-readable, auditable result.
 
 ## How to produce it
 

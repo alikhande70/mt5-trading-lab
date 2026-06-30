@@ -84,6 +84,11 @@ Requires Python 3.9+. No external runtime dependencies.
 pip install -e .
 ```
 
+For a full step-by-step setup and verification guide (Windows PowerShell venv,
+dependency preflight, CLI/help checks, running the tests, exporting reports from
+MT5, and a recommended evidence-folder layout), see
+[docs/INSTALL_RUNBOOK.md](docs/INSTALL_RUNBOOK.md).
+
 ## Quick start
 
 ```bash
@@ -472,7 +477,7 @@ docs/
   REPORT_INTELLIGENCE_ENGINE.md, CORE_SAFETY_BOUNDARY.md, METRICS_REFERENCE.md,
   DIAGNOSTICS_REFERENCE.md, COMPARISON_ENGINE.md, DEMO_READINESS.md,
   JSON_OUTPUT_SCHEMA.md, OPTIONAL_MCP_WRAPPER.md, AGENT_STACK_INTEGRATION.md,
-  CLAUDE_COWORK_HANDOFF.md, EXAMPLES.md, USAGE.md
+  INSTALL_RUNBOOK.md, EXAMPLES.md, USAGE.md
 ```
 
 ## Known limitations

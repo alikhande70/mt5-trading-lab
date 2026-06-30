@@ -24,17 +24,17 @@ and composes with them only through files.
    report, or a deals/trades `.csv`.
 3. `mt5-trading-lab` is pointed at that file and produces a Markdown and/or JSON
    analysis, comparison, or demo-readiness report.
-4. An agent (Claude Code / Claude Cowork) reads the JSON output to make an
-   auditable, deterministic decision.
+4. An agent or CLI consumer reads the JSON output to make an auditable,
+   deterministic decision.
 
 ```
 MT5 Strategy Tester ──export──▶ report.htm / deals.csv ──▶ mt5-trading-lab ──▶ report.md / report.json
         (metatrader5-mcp can drive step 1)                  (local, offline)        (for humans / agents)
 ```
 
-## How Claude Code can use it
+## How an agent or CLI can use it
 
-After a backtest is exported, Claude Code can run any command and read the
+After a backtest is exported, any agent or script can run a command and read the
 results — Markdown for humans, JSON for programmatic decisions:
 
 ```bash
@@ -43,11 +43,11 @@ python -m trading_lab compare-reports a.htm b.htm c.htm --out comparison.md --fo
 python -m trading_lab demo-readiness report.htm --deals deals.csv --format json --json-out demo.json
 ```
 
-## How Claude Cowork can run it locally
+## How to run it locally
 
-See [CLAUDE_COWORK_HANDOFF.md](CLAUDE_COWORK_HANDOFF.md) for the exact local
-steps and boundaries. In short: clone, install, run on exported files only — no
-MT5 connection, no broker, no credentials, no order execution.
+See [INSTALL_RUNBOOK.md](INSTALL_RUNBOOK.md) for the exact local setup and run
+steps. In short: clone, install, run on exported files only — no MT5 connection,
+no broker, no credentials, no order execution.
 
 ## Why trading-lab must not connect directly
 

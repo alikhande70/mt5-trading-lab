@@ -12,7 +12,7 @@ project's main value, and it is enforced by tests (see
 [CORE_SAFETY_BOUNDARY.md](CORE_SAFETY_BOUNDARY.md)).
 
 An MCP wrapper, if and when added, is an **adapter** that lets an MCP client
-(such as Claude) call the existing core functions on local files. It is:
+call the existing core functions on local files. It is:
 
 - **Optional** — the CLI and library work identically without it.
 - **Separate** — it lives *outside* `src/trading_lab/` (e.g. `adapters/mcp/`),
