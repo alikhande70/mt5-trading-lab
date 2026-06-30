@@ -10,6 +10,7 @@ dist/
 
 # Generated reports / user-supplied broker exports (local artifacts, not source)
 /reports/
+/evidence/
 *.htm
 *.html
 !tests/fixtures/**/*.htm

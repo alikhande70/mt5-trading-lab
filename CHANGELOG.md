@@ -26,7 +26,7 @@ All notable changes to this project are documented in this file.
   demo-readiness`.
 - New docs: report intelligence overview, core safety boundary, metrics,
   diagnostics, comparison, demo-readiness, JSON schema, optional MCP wrapper
-  (deferred), agent-stack integration, Claude Cowork handoff, and examples.
+  (deferred), agent-stack integration, local install runbook, and examples.
 - Additional safety tests: `tests/test_core_no_mcp_dependency.py`,
   `tests/test_core_no_broker_dependency.py`, and a broker/MT5 import guard in
   `tests/test_safety_invariants.py`.

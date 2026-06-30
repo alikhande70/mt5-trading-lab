@@ -16,8 +16,8 @@ verdicts. Nothing is connected, hosted, or kept running.
   - a **demo-readiness** read (Ready / No / Needs Review),
   - a **multi-backtest comparison** that ranks candidates risk-adjusted,
   - both **Markdown** (for humans) and **JSON** (for scripts/agents) output.
-- A tool that any agent — Claude Code, Claude Cowork — can run locally on
-  exported files and get a structured, explainable answer it can audit.
+- A tool that any agent or CLI consumer can run locally on exported files and
+  get a structured, explainable answer it can audit.
 
 ## What this project is not
 
